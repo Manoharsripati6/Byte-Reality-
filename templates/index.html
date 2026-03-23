@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3D SVM VR Visualization</title>
+  <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #0a0a1a; color: #e0e0e0; overflow: hidden; }
+
+    #upload-panel {
+      position: fixed; top: 20px; left: 20px; z-index: 9999;
+      background: rgba(15, 15, 35, 0.92); border: 1px solid rgba(100, 140, 255, 0.3);
+      border-radius: 12px; padding: 20px 24px; backdrop-filter: blur(12px);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5); max-width: 340px;
+      transition: all 0.3s ease;
+    }
+    #upload-panel h2 {
+      font-size: 16px; font-weight: 600; margin-bottom: 14px;
+      color: #8ab4ff; letter-spacing: 0.5px;
+    }
+    #upload-panel label {
+      display: block; cursor: pointer; text-align: center;
+      padding: 12px 20px; border: 2px dashed rgba(100, 140, 255, 0.4);
+      border-radius: 8px; color: #8ab4ff; font-size: 13px;
+      transition: all 0.2s ease; margin-bottom: 12px;
+    }
+    #upload-panel label:hover {
+      border-color: #8ab4ff; background: rgba(100, 140, 255, 0.08);
+    }
+    #upload-panel label.has-file { border-color: #6fdc6f; color: #6fdc6f; }
+    #file-input { display: none; }
+    #upload-btn {
+      width: 100%; padding: 10px; border: none; border-radius: 8px;
+      background: linear-gradient(135deg, #4a7cff, #6f5cff); color: #fff;
+      font-size: 14px; font-weight: 600; cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    #upload-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(74,124,255,0.4); }
+    #upload-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    #status {
+      margin-top: 10px; font-size: 12px; min-height: 18px;
+      transition: all 0.3s ease;
+    }
+    #status.error { color: #ff6b6b; }
+    #status.success { color: #6fdc6f; }
+    #status.loading { color: #ffd93d; }
+
+    #legend {
+      position: fixed; bottom: 20px; left: 20px; z-index: 9999;
+      background: rgba(15, 15, 35, 0.92); border: 1px solid rgba(100, 140, 255, 0.2);
+      border-radius: 10px; padding: 14px 18px; backdrop-filter: blur(12px);
+      font-size: 12px; display: none;
+    }
+    #legend div { margin: 4px 0; display: flex; align-items: center; gap: 8px; }
+    #legend .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+    #info-panel {
+      position: fixed; top: 20px; right: 20px; z-index: 9999;
+      background: rgba(15, 15, 35, 0.92); border: 1px solid rgba(100, 140, 255, 0.2);
+      border-radius: 10px; padding: 14px 18px; backdrop-filter: blur(12px);
+      font-size: 12px; display: none; min-width: 200px;
+    }
+    #info-panel h3 { color: #8ab4ff; margin-bottom: 8px; font-size: 13px; }
+    #info-panel div { margin: 3px 0; color: #b0b0d0; }
+  </style>
+</head>
+<body>
+
+  <!-- Upload Panel -->
+  <div id="upload-panel">
+    <h2>SVM VR Visualizer</h2>
+    <label id="file-label" for="file-input">
+      Drop or click to select dataset (.json)
+    </label>
+    <input type="file" id="file-input" accept=".json" />
+    <button id="upload-btn" disabled>Visualize</button>
+    <div id="status"></div>
+  </div>
+
+  <!-- Legend -->
+  <div id="legend">
+    <div><span class="dot" style="background:#ff4444;"></span> Class 0</div>
+    <div><span class="dot" style="background:#4488ff;"></span> Class 1</div>
+    <div><span class="dot" style="background:rgba(180,140,255,0.5);"></span> Decision Boundary</div>
+  </div>
+
+  <!-- Info Panel -->
+  <div id="info-panel">
+    <h3>Model Info</h3>
+    <div id="info-content"></div>
+  </div>
+
+  <!-- A-Frame Scene -->
+  <a-scene id="vr-scene" background="color: #0a0a1a" vr-mode-ui="enabled: true" embedded
+    style="position: fixed; top: 0; left: 0; width: 100%; height: 100%;">
+
+    <!-- Camera -->
+    <a-entity id="rig" position="0 2 8">
+      <a-camera wasd-controls="acceleration: 20" look-controls="pointerLockEnabled: false">
+        <a-cursor color="#8ab4ff" fuse="false"></a-cursor>
+      </a-camera>
+    </a-entity>
+
+    <!-- Lighting -->
+    <a-light type="ambient" color="#445566" intensity="0.6"></a-light>
+    <a-light type="directional" color="#ffffff" intensity="0.8" position="2 4 3"></a-light>
+    <a-light type="directional" color="#6688cc" intensity="0.3" position="-3 2 -2"></a-light>
+
+    <!-- Coordinate System Container (centered at origin) -->
+    <a-entity id="coord-system" position="0 0 0">
+
+      <!-- Bounding Cube (wireframe) -->
+      <a-box position="0 0 0" width="5" height="5" depth="5"
+        material="color: #334466; wireframe: true; opacity: 0.3"></a-box>
+
+      <!-- X Axis (Red) -->
+      <a-cylinder position="0 0 0" radius="0.02" height="5"
+        rotation="0 0 90" color="#ff4444" material="opacity: 0.7"></a-cylinder>
+      <a-cone position="2.6 0 0" radius-bottom="0.06" height="0.2"
+        rotation="0 0 -90" color="#ff4444"></a-cone>
+      <a-text value="X" position="2.8 0.15 0" color="#ff4444" scale="0.6 0.6 0.6"
+        align="center"></a-text>
+
+      <!-- Y Axis (Green) - vertical -->
+      <a-cylinder position="0 0 0" radius="0.02" height="5"
+        rotation="0 0 0" color="#44ff44" material="opacity: 0.7"></a-cylinder>
+      <a-cone position="0 2.6 0" radius-bottom="0.06" height="0.2"
+        rotation="0 0 0" color="#44ff44"></a-cone>
+      <a-text value="Y" position="0.15 2.8 0" color="#44ff44" scale="0.6 0.6 0.6"
+        align="center"></a-text>
+
+      <!-- Z Axis (Blue) -->
+      <a-cylinder position="0 0 0" radius="0.02" height="5"
+        rotation="90 0 0" color="#4488ff" material="opacity: 0.7"></a-cylinder>
+      <a-cone position="0 0 2.6" radius-bottom="0.06" height="0.2"
+        rotation="-90 0 0" color="#4488ff"></a-cone>
+      <a-text value="Z" position="0 0.15 2.8" color="#4488ff" scale="0.6 0.6 0.6"
+        align="center"></a-text>
+
+      <!-- Grid floor (subtle) -->
+      <a-plane position="0 -2.5 0" rotation="-90 0 0" width="5" height="5"
+        material="color: #223344; opacity: 0.15; side: double"></a-plane>
+
+      <!-- Data points container -->
+      <a-entity id="data-points"></a-entity>
+
+      <!-- Decision boundary container -->
+      <a-entity id="decision-boundary"></a-entity>
+
+    </a-entity>
+
+  </a-scene>
+
+  <script>
+    const fileInput = document.getElementById('file-input');
+    const fileLabel = document.getElementById('file-label');
+    const uploadBtn = document.getElementById('upload-btn');
+    const statusEl = document.getElementById('status');
+    const legend = document.getElementById('legend');
+    const infoPanel = document.getElementById('info-panel');
+    const infoContent = document.getElementById('info-content');
+
+    let selectedFile = null;
+
+    fileInput.addEventListener('change', (e) => {
+      selectedFile = e.target.files[0];
+      if (selectedFile) {
+        fileLabel.textContent = selectedFile.name;
+        fileLabel.classList.add('has-file');
+        uploadBtn.disabled = false;
+      }
+    });
+
+    uploadBtn.addEventListener('click', async () => {
+      if (!selectedFile) return;
+
+      uploadBtn.disabled = true;
+      statusEl.className = 'loading';
+      statusEl.textContent = 'Processing dataset...';
+
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+
+      try {
+        const res = await fetch('/upload', { method: 'POST', body: formData });
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.error || 'Upload failed');
+        }
+
+        statusEl.className = 'success';
+        statusEl.textContent = `Trained on ${data.num_points} points. Loading scene...`;
+
+        // Show info panel
+        infoContent.innerHTML = `
+          <div>Points: ${data.num_points}</div>
+          <div>Classes: ${data.classes.join(', ')}</div>
+          <div>W: [${data.svm_weights.map(v => v.toFixed(3)).join(', ')}]</div>
+          <div>b: ${data.svm_bias.toFixed(3)}</div>
+        `;
+        infoPanel.style.display = 'block';
+
+        // Load visualization
+        await loadVisualization();
+
+        statusEl.textContent = 'Visualization ready!';
+        legend.style.display = 'block';
+
+      } catch (err) {
+        statusEl.className = 'error';
+        statusEl.textContent = err.message;
+        uploadBtn.disabled = false;
+      }
+    });
+
+    async function loadVisualization() {
+      // Clear previous
+      const pointsContainer = document.getElementById('data-points');
+      const planeContainer = document.getElementById('decision-boundary');
+      pointsContainer.innerHTML = '';
+      planeContainer.innerHTML = '';
+
+      // Add cache-busting timestamp
+      const ts = Date.now();
+
+      // Fetch both JSON files
+      const [pointsRes, planeRes] = await Promise.all([
+        fetch(`/static/points.json?t=${ts}`),
+        fetch(`/static/plane.json?t=${ts}`)
+      ]);
+
+      const pointsData = await pointsRes.json();
+      const planeData = await planeRes.json();
+
+      // Render data points as spheres
+      const colors = { 0: '#ff4444', 1: '#4488ff', 2: '#44ff88', 3: '#ffaa44' };
+
+      pointsData.points.forEach((pt, i) => {
+        const sphere = document.createElement('a-sphere');
+        sphere.setAttribute('position', `${pt.x} ${pt.y} ${pt.z}`);
+        sphere.setAttribute('radius', '0.08');
+        sphere.setAttribute('color', colors[pt.label] || '#ffffff');
+        sphere.setAttribute('material', `opacity: 0.9; metalness: 0.3; roughness: 0.6`);
+        sphere.setAttribute('class', 'data-point');
+        pointsContainer.appendChild(sphere);
+      });
+
+      // Render decision boundary as semi-transparent boxes
+      const step = 5.0 / 30;  // matches grid_steps in backend
+      planeData.plane.forEach((pt) => {
+        const box = document.createElement('a-box');
+        box.setAttribute('position', `${pt.x} ${pt.y} ${pt.z}`);
+        box.setAttribute('width', String(step));
+        box.setAttribute('height', String(step));
+        box.setAttribute('depth', String(step));
+        box.setAttribute('material',
+          'color: #b48cff; opacity: 0.18; transparent: true; side: double; metalness: 0.1; roughness: 0.8');
+        planeContainer.appendChild(box);
+      });
+    }
+  </script>
+
+</body>
+</html>
