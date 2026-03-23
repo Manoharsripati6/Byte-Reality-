@@ -661,24 +661,20 @@
     <!-- ══════════ BYTE REALITY 3D Title ══════════ -->
     <a-entity id="title-group" position="0 4.5 -4">
       <!-- Main title text -->
-      <a-text value="BYTE REALITY" position="0 0 0" color="#8ab4ff"
+      <a-text value="Byte Reality" position="0 0 0" color="#8ab4ff"
         align="center" scale="5 5 5" font="mozillavr"
         animation="property: position; from: 0 -0.08 0; to: 0 0.08 0; dur: 4000; dir: alternate; loop: true; easing: easeInOutSine"></a-text>
       <!-- Glow duplicate behind for bloom effect -->
-      <a-text value="BYTE REALITY" position="0 0 -0.05" color="#4466cc"
+      <a-text value="Byte Reality" position="0 0 -0.05" color="#4466cc"
         align="center" scale="5.1 5.1 5.1" font="mozillavr"
         material="opacity: 0.3"
         animation="property: position; from: 0 -0.08 -0.05; to: 0 0.08 -0.05; dur: 4000; dir: alternate; loop: true; easing: easeInOutSine"></a-text>
-      <!-- Subtitle -->
-      <a-text value="Machine Learning VR Visualizer" position="0 -0.7 0" color="#6688cc"
-        align="center" scale="1.5 1.5 1.5" font="mozillavr"></a-text>
       <!-- Decorative line under title -->
-      <a-box position="0 -1.0 0" width="8" height="0.025" depth="0.025"
+      <a-box position="0 -0.5 0" width="7" height="0.025" depth="0.025"
         material="color: #4466cc; emissive: #4466cc; emissiveIntensity: 0.6; opacity: 0.5"
         animation="property: material.emissiveIntensity; from: 0.3; to: 0.8; dur: 2500; dir: alternate; loop: true"></a-box>
-      <!-- Small accent dots on ends of the line -->
-      <a-sphere position="-4 -1.0 0" radius="0.05" material="color: #8ab4ff; emissive: #8ab4ff; emissiveIntensity: 0.8; opacity: 0.7"></a-sphere>
-      <a-sphere position="4 -1.0 0" radius="0.05" material="color: #8ab4ff; emissive: #8ab4ff; emissiveIntensity: 0.8; opacity: 0.7"></a-sphere>
+      <a-sphere position="-3.5 -0.5 0" radius="0.05" material="color: #8ab4ff; emissive: #8ab4ff; emissiveIntensity: 0.8; opacity: 0.7"></a-sphere>
+      <a-sphere position="3.5 -0.5 0" radius="0.05" material="color: #8ab4ff; emissive: #8ab4ff; emissiveIntensity: 0.8; opacity: 0.7"></a-sphere>
     </a-entity>
 
     <!-- Neural Network 3D (above the cube) -->
