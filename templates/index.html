@@ -7,72 +7,170 @@
   <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #0a0a1a; color: #e0e0e0; overflow: hidden; }
 
-    #upload-panel {
-      position: fixed; top: 20px; left: 20px; z-index: 9999;
-      background: rgba(15, 15, 35, 0.92); border: 1px solid rgba(100, 140, 255, 0.3);
-      border-radius: 12px; padding: 20px 24px; backdrop-filter: blur(12px);
-      box-shadow: 0 8px 32px rgba(0,0,0,0.5); max-width: 340px;
-      transition: all 0.3s ease;
+    /* ── CSS Custom Properties for theming ── */
+    :root {
+      --bg: #0a0a1a;
+      --text: #e0e0e0;
+      --text-muted: #b0b0d0;
+      --panel-bg: rgba(15, 15, 35, 0.92);
+      --panel-border: rgba(100, 140, 255, 0.3);
+      --panel-border-light: rgba(100, 140, 255, 0.2);
+      --accent: #8ab4ff;
+      --accent-hover: rgba(100, 140, 255, 0.08);
+      --btn-grad: linear-gradient(135deg, #4a7cff, #6f5cff);
+      --btn-shadow: rgba(74, 124, 255, 0.4);
+      --success: #6fdc6f;
+      --error: #ff6b6b;
+      --warning: #ffd93d;
+      --scene-bg: #0a0a1a;
+      --cube-color: #334466;
+      --floor-color: #223344;
+    }
+
+    body.light-mode {
+      --bg: #f0f2f8;
+      --text: #2a2a3a;
+      --text-muted: #5a5a7a;
+      --panel-bg: rgba(255, 255, 255, 0.94);
+      --panel-border: rgba(80, 100, 180, 0.25);
+      --panel-border-light: rgba(80, 100, 180, 0.15);
+      --accent: #3a6ad8;
+      --accent-hover: rgba(58, 106, 216, 0.08);
+      --btn-grad: linear-gradient(135deg, #3a6ad8, #5b4ad8);
+      --btn-shadow: rgba(58, 106, 216, 0.35);
+      --success: #2a9d2a;
+      --error: #d93636;
+      --warning: #c8a000;
+      --scene-bg: #dde2ee;
+      --cube-color: #8899bb;
+      --floor-color: #aabbdd;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, sans-serif;
+      background: var(--bg); color: var(--text); overflow: hidden;
+      transition: background 0.4s ease, color 0.4s ease;
+    }
+
+    /* ── Panels ── */
+    .panel {
+      position: fixed; z-index: 9999;
+      background: var(--panel-bg); border: 1px solid var(--panel-border);
+      border-radius: 12px; padding: 18px 22px; backdrop-filter: blur(14px);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+      transition: background 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease;
+    }
+
+    /* Upload panel */
+    #upload-panel { top: 20px; left: 20px; max-width: 340px; }
+    #upload-panel .panel-header {
+      display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;
     }
     #upload-panel h2 {
-      font-size: 16px; font-weight: 600; margin-bottom: 14px;
-      color: #8ab4ff; letter-spacing: 0.5px;
+      font-size: 16px; font-weight: 600;
+      color: var(--accent); letter-spacing: 0.5px; margin: 0;
     }
+
+    /* Theme toggle */
+    #theme-toggle {
+      width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--panel-border);
+      background: var(--panel-bg); cursor: pointer; font-size: 16px;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.3s ease;
+    }
+    #theme-toggle:hover { transform: scale(1.1); border-color: var(--accent); }
+
+    /* File label */
     #upload-panel label {
       display: block; cursor: pointer; text-align: center;
-      padding: 12px 20px; border: 2px dashed rgba(100, 140, 255, 0.4);
-      border-radius: 8px; color: #8ab4ff; font-size: 13px;
+      padding: 14px 20px; border: 2px dashed var(--panel-border);
+      border-radius: 8px; color: var(--accent); font-size: 13px;
       transition: all 0.2s ease; margin-bottom: 12px;
     }
     #upload-panel label:hover {
-      border-color: #8ab4ff; background: rgba(100, 140, 255, 0.08);
+      border-color: var(--accent); background: var(--accent-hover);
     }
-    #upload-panel label.has-file { border-color: #6fdc6f; color: #6fdc6f; }
+    #upload-panel label.has-file { border-color: var(--success); color: var(--success); }
     #file-input { display: none; }
+
+    /* Upload button */
     #upload-btn {
-      width: 100%; padding: 10px; border: none; border-radius: 8px;
-      background: linear-gradient(135deg, #4a7cff, #6f5cff); color: #fff;
+      width: 100%; padding: 11px; border: none; border-radius: 8px;
+      background: var(--btn-grad); color: #fff;
       font-size: 14px; font-weight: 600; cursor: pointer;
       transition: all 0.2s ease;
     }
-    #upload-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(74,124,255,0.4); }
-    #upload-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-    #status {
-      margin-top: 10px; font-size: 12px; min-height: 18px;
-      transition: all 0.3s ease;
-    }
-    #status.error { color: #ff6b6b; }
-    #status.success { color: #6fdc6f; }
-    #status.loading { color: #ffd93d; }
+    #upload-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 16px var(--btn-shadow); }
+    #upload-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; box-shadow: none; }
 
+    /* Status */
+    #status { margin-top: 10px; font-size: 12px; min-height: 18px; transition: all 0.3s ease; }
+    #status.error { color: var(--error); }
+    #status.success { color: var(--success); }
+    #status.loading { color: var(--warning); }
+
+    /* Legend */
     #legend {
-      position: fixed; bottom: 20px; left: 20px; z-index: 9999;
-      background: rgba(15, 15, 35, 0.92); border: 1px solid rgba(100, 140, 255, 0.2);
-      border-radius: 10px; padding: 14px 18px; backdrop-filter: blur(12px);
+      bottom: 20px; left: 20px; border-color: var(--panel-border-light);
       font-size: 12px; display: none;
     }
-    #legend div { margin: 4px 0; display: flex; align-items: center; gap: 8px; }
-    #legend .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    #legend div { margin: 5px 0; display: flex; align-items: center; gap: 8px; color: var(--text); }
+    #legend .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
 
+    /* Info panel */
     #info-panel {
-      position: fixed; top: 20px; right: 20px; z-index: 9999;
-      background: rgba(15, 15, 35, 0.92); border: 1px solid rgba(100, 140, 255, 0.2);
-      border-radius: 10px; padding: 14px 18px; backdrop-filter: blur(12px);
-      font-size: 12px; display: none; min-width: 200px;
+      top: 20px; right: 20px; border-color: var(--panel-border-light);
+      font-size: 12px; display: none; min-width: 210px;
     }
-    #info-panel h3 { color: #8ab4ff; margin-bottom: 8px; font-size: 13px; }
-    #info-panel div { margin: 3px 0; color: #b0b0d0; }
+    #info-panel h3 { color: var(--accent); margin-bottom: 8px; font-size: 13px; font-weight: 600; }
+    #info-panel div { margin: 4px 0; color: var(--text-muted); }
+
+    /* Controls panel */
+    #controls-panel {
+      bottom: 20px; right: 20px; border-color: var(--panel-border-light);
+      font-size: 11px; display: none;
+    }
+    #controls-panel h3 { color: var(--accent); margin-bottom: 6px; font-size: 12px; font-weight: 600; }
+    #controls-panel .control-row {
+      display: flex; align-items: center; gap: 10px; margin: 6px 0; color: var(--text-muted);
+    }
+    #controls-panel .control-row label { min-width: 60px; font-size: 11px; }
+    #controls-panel input[type="range"] {
+      flex: 1; accent-color: var(--accent); height: 4px; cursor: pointer;
+    }
+    #controls-panel .control-row span { min-width: 30px; text-align: right; font-variant-numeric: tabular-nums; }
+
+    /* Toggle buttons row */
+    .toggle-row {
+      display: flex; gap: 6px; margin-top: 8px;
+    }
+    .toggle-btn {
+      flex: 1; padding: 6px 8px; border: 1px solid var(--panel-border);
+      border-radius: 6px; background: transparent; color: var(--text-muted);
+      font-size: 11px; cursor: pointer; transition: all 0.2s ease; text-align: center;
+    }
+    .toggle-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .toggle-btn:hover:not(.active) { border-color: var(--accent); color: var(--accent); }
+
+    /* Animations */
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .fade-in { animation: fadeIn 0.4s ease forwards; }
+
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .loading-pulse { animation: pulse 1.2s ease infinite; }
   </style>
 </head>
 <body>
 
   <!-- Upload Panel -->
-  <div id="upload-panel">
-    <h2>SVM VR Visualizer</h2>
+  <div id="upload-panel" class="panel">
+    <div class="panel-header">
+      <h2>SVM VR Visualizer</h2>
+      <button id="theme-toggle" title="Toggle light/dark mode">&#9790;</button>
+    </div>
     <label id="file-label" for="file-input">
-      Drop or click to select dataset (.json)
+      Click to select dataset (.json)
     </label>
     <input type="file" id="file-input" accept=".json" />
     <button id="upload-btn" disabled>Visualize</button>
@@ -80,68 +178,103 @@
   </div>
 
   <!-- Legend -->
-  <div id="legend">
-    <div><span class="dot" style="background:#ff4444;"></span> Class 0</div>
-    <div><span class="dot" style="background:#4488ff;"></span> Class 1</div>
-    <div><span class="dot" style="background:rgba(180,140,255,0.5);"></span> Decision Boundary</div>
+  <div id="legend" class="panel">
+    <div><span class="dot" style="background:#ff4466;"></span> Class 0</div>
+    <div><span class="dot" style="background:#4499ff;"></span> Class 1</div>
+    <div><span class="dot" style="background:rgba(180,140,255,0.6);"></span> Decision Boundary</div>
   </div>
 
   <!-- Info Panel -->
-  <div id="info-panel">
+  <div id="info-panel" class="panel">
     <h3>Model Info</h3>
     <div id="info-content"></div>
   </div>
 
+  <!-- Controls Panel -->
+  <div id="controls-panel" class="panel">
+    <h3>Controls</h3>
+    <div class="control-row">
+      <label>Point Size</label>
+      <input type="range" id="point-size" min="0.03" max="0.2" step="0.01" value="0.08" />
+      <span id="point-size-val">0.08</span>
+    </div>
+    <div class="control-row">
+      <label>Plane Alpha</label>
+      <input type="range" id="plane-opacity" min="0.05" max="0.6" step="0.01" value="0.18" />
+      <span id="plane-opacity-val">0.18</span>
+    </div>
+    <div class="toggle-row">
+      <button class="toggle-btn active" id="toggle-points">Points</button>
+      <button class="toggle-btn active" id="toggle-plane">Plane</button>
+      <button class="toggle-btn active" id="toggle-axes">Axes</button>
+    </div>
+  </div>
+
   <!-- A-Frame Scene -->
-  <a-scene id="vr-scene" background="color: #0a0a1a" vr-mode-ui="enabled: true" embedded
+  <a-scene id="vr-scene" vr-mode-ui="enabled: true" embedded
     style="position: fixed; top: 0; left: 0; width: 100%; height: 100%;">
+
+    <!-- Sky -->
+    <a-sky id="scene-sky" color="#0a0a1a"></a-sky>
 
     <!-- Camera -->
     <a-entity id="rig" position="0 2 8">
       <a-camera wasd-controls="acceleration: 20" look-controls="pointerLockEnabled: false">
-        <a-cursor color="#8ab4ff" fuse="false"></a-cursor>
+        <a-cursor color="#8ab4ff" fuse="false" raycaster="objects: .data-point"></a-cursor>
       </a-camera>
     </a-entity>
 
     <!-- Lighting -->
-    <a-light type="ambient" color="#445566" intensity="0.6"></a-light>
+    <a-light id="light-ambient" type="ambient" color="#445566" intensity="0.6"></a-light>
     <a-light type="directional" color="#ffffff" intensity="0.8" position="2 4 3"></a-light>
     <a-light type="directional" color="#6688cc" intensity="0.3" position="-3 2 -2"></a-light>
+    <a-light type="point" color="#ffffff" intensity="0.2" position="0 3 0"></a-light>
 
-    <!-- Coordinate System Container (centered at origin) -->
+    <!-- Coordinate System Container -->
     <a-entity id="coord-system" position="0 0 0">
 
       <!-- Bounding Cube (wireframe) -->
-      <a-box position="0 0 0" width="5" height="5" depth="5"
+      <a-box id="bounding-cube" position="0 0 0" width="5" height="5" depth="5"
         material="color: #334466; wireframe: true; opacity: 0.3"></a-box>
 
-      <!-- X Axis (Red) -->
-      <a-cylinder position="0 0 0" radius="0.02" height="5"
-        rotation="0 0 90" color="#ff4444" material="opacity: 0.7"></a-cylinder>
-      <a-cone position="2.6 0 0" radius-bottom="0.06" height="0.2"
-        rotation="0 0 -90" color="#ff4444"></a-cone>
-      <a-text value="X" position="2.8 0.15 0" color="#ff4444" scale="0.6 0.6 0.6"
-        align="center"></a-text>
+      <!-- Axes group -->
+      <a-entity id="axes-group">
+        <!-- X Axis (Red) -->
+        <a-cylinder position="0 0 0" radius="0.02" height="5"
+          rotation="0 0 90" color="#ff4466" material="opacity: 0.7"></a-cylinder>
+        <a-cone position="2.6 0 0" radius-bottom="0.06" height="0.2"
+          rotation="0 0 -90" color="#ff4466"></a-cone>
+        <a-text value="X" position="2.85 0.18 0" color="#ff4466" scale="0.7 0.7 0.7"
+          align="center"></a-text>
 
-      <!-- Y Axis (Green) - vertical -->
-      <a-cylinder position="0 0 0" radius="0.02" height="5"
-        rotation="0 0 0" color="#44ff44" material="opacity: 0.7"></a-cylinder>
-      <a-cone position="0 2.6 0" radius-bottom="0.06" height="0.2"
-        rotation="0 0 0" color="#44ff44"></a-cone>
-      <a-text value="Y" position="0.15 2.8 0" color="#44ff44" scale="0.6 0.6 0.6"
-        align="center"></a-text>
+        <!-- Y Axis (Green) - vertical -->
+        <a-cylinder position="0 0 0" radius="0.02" height="5"
+          rotation="0 0 0" color="#44dd66" material="opacity: 0.7"></a-cylinder>
+        <a-cone position="0 2.6 0" radius-bottom="0.06" height="0.2"
+          rotation="0 0 0" color="#44dd66"></a-cone>
+        <a-text value="Y" position="0.18 2.85 0" color="#44dd66" scale="0.7 0.7 0.7"
+          align="center"></a-text>
 
-      <!-- Z Axis (Blue) -->
-      <a-cylinder position="0 0 0" radius="0.02" height="5"
-        rotation="90 0 0" color="#4488ff" material="opacity: 0.7"></a-cylinder>
-      <a-cone position="0 0 2.6" radius-bottom="0.06" height="0.2"
-        rotation="-90 0 0" color="#4488ff"></a-cone>
-      <a-text value="Z" position="0 0.15 2.8" color="#4488ff" scale="0.6 0.6 0.6"
-        align="center"></a-text>
+        <!-- Z Axis (Blue) -->
+        <a-cylinder position="0 0 0" radius="0.02" height="5"
+          rotation="90 0 0" color="#4499ff" material="opacity: 0.7"></a-cylinder>
+        <a-cone position="0 0 2.6" radius-bottom="0.06" height="0.2"
+          rotation="-90 0 0" color="#4499ff"></a-cone>
+        <a-text value="Z" position="0 0.18 2.85" color="#4499ff" scale="0.7 0.7 0.7"
+          align="center"></a-text>
+
+        <!-- Tick marks on axes -->
+        <a-text value="-2" position="-2 -0.25 0" color="#ff4466" scale="0.4 0.4 0.4" align="center"></a-text>
+        <a-text value="2" position="2 -0.25 0" color="#ff4466" scale="0.4 0.4 0.4" align="center"></a-text>
+        <a-text value="-2" position="-0.25 -2 0" color="#44dd66" scale="0.4 0.4 0.4" align="center"></a-text>
+        <a-text value="2" position="-0.25 2 0" color="#44dd66" scale="0.4 0.4 0.4" align="center"></a-text>
+        <a-text value="-2" position="0 -0.25 -2" color="#4499ff" scale="0.4 0.4 0.4" align="center"></a-text>
+        <a-text value="2" position="0 -0.25 2" color="#4499ff" scale="0.4 0.4 0.4" align="center"></a-text>
+      </a-entity>
 
       <!-- Grid floor (subtle) -->
       <a-plane position="0 -2.5 0" rotation="-90 0 0" width="5" height="5"
-        material="color: #223344; opacity: 0.15; side: double"></a-plane>
+        material="color: #223344; opacity: 0.12; side: double"></a-plane>
 
       <!-- Data points container -->
       <a-entity id="data-points"></a-entity>
@@ -154,6 +287,37 @@
   </a-scene>
 
   <script>
+    /* ── Theme Management ── */
+    const body = document.body;
+    const themeToggle = document.getElementById('theme-toggle');
+    let isDark = true;
+
+    function applyTheme() {
+      const sky = document.getElementById('scene-sky');
+      const cube = document.getElementById('bounding-cube');
+      const ambient = document.getElementById('light-ambient');
+
+      if (isDark) {
+        body.classList.remove('light-mode');
+        themeToggle.innerHTML = '&#9790;';  // moon
+        sky.setAttribute('color', '#0a0a1a');
+        cube.setAttribute('material', 'color: #334466; wireframe: true; opacity: 0.3');
+        ambient.setAttribute('intensity', '0.6');
+      } else {
+        body.classList.add('light-mode');
+        themeToggle.innerHTML = '&#9728;';  // sun
+        sky.setAttribute('color', '#dde2ee');
+        cube.setAttribute('material', 'color: #8899bb; wireframe: true; opacity: 0.4');
+        ambient.setAttribute('intensity', '0.9');
+      }
+    }
+
+    themeToggle.addEventListener('click', () => {
+      isDark = !isDark;
+      applyTheme();
+    });
+
+    /* ── Upload Logic ── */
     const fileInput = document.getElementById('file-input');
     const fileLabel = document.getElementById('file-label');
     const uploadBtn = document.getElementById('upload-btn');
@@ -161,6 +325,7 @@
     const legend = document.getElementById('legend');
     const infoPanel = document.getElementById('info-panel');
     const infoContent = document.getElementById('info-content');
+    const controlsPanel = document.getElementById('controls-panel');
 
     let selectedFile = null;
 
@@ -177,7 +342,7 @@
       if (!selectedFile) return;
 
       uploadBtn.disabled = true;
-      statusEl.className = 'loading';
+      statusEl.className = 'loading loading-pulse';
       statusEl.textContent = 'Processing dataset...';
 
       const formData = new FormData();
@@ -192,22 +357,26 @@
         }
 
         statusEl.className = 'success';
-        statusEl.textContent = `Trained on ${data.num_points} points. Loading scene...`;
+        statusEl.textContent = `Trained on ${data.num_points} points. Loading...`;
 
         // Show info panel
         infoContent.innerHTML = `
-          <div>Points: ${data.num_points}</div>
-          <div>Classes: ${data.classes.join(', ')}</div>
+          <div>Points: <strong>${data.num_points}</strong></div>
+          <div>Classes: <strong>${data.classes.join(', ')}</strong></div>
           <div>W: [${data.svm_weights.map(v => v.toFixed(3)).join(', ')}]</div>
           <div>b: ${data.svm_bias.toFixed(3)}</div>
         `;
         infoPanel.style.display = 'block';
+        infoPanel.classList.add('fade-in');
 
         // Load visualization
         await loadVisualization();
 
         statusEl.textContent = 'Visualization ready!';
         legend.style.display = 'block';
+        legend.classList.add('fade-in');
+        controlsPanel.style.display = 'block';
+        controlsPanel.classList.add('fade-in');
 
       } catch (err) {
         statusEl.className = 'error';
@@ -216,17 +385,16 @@
       }
     });
 
+    /* ── Visualization ── */
+    const COLORS = { 0: '#ff4466', 1: '#4499ff', 2: '#44ff88', 3: '#ffaa44' };
+
     async function loadVisualization() {
-      // Clear previous
       const pointsContainer = document.getElementById('data-points');
       const planeContainer = document.getElementById('decision-boundary');
       pointsContainer.innerHTML = '';
       planeContainer.innerHTML = '';
 
-      // Add cache-busting timestamp
       const ts = Date.now();
-
-      // Fetch both JSON files
       const [pointsRes, planeRes] = await Promise.all([
         fetch(`/static/points.json?t=${ts}`),
         fetch(`/static/plane.json?t=${ts}`)
@@ -236,20 +404,20 @@
       const planeData = await planeRes.json();
 
       // Render data points as spheres
-      const colors = { 0: '#ff4444', 1: '#4488ff', 2: '#44ff88', 3: '#ffaa44' };
-
-      pointsData.points.forEach((pt, i) => {
+      const radius = parseFloat(document.getElementById('point-size').value);
+      pointsData.points.forEach((pt) => {
         const sphere = document.createElement('a-sphere');
         sphere.setAttribute('position', `${pt.x} ${pt.y} ${pt.z}`);
-        sphere.setAttribute('radius', '0.08');
-        sphere.setAttribute('color', colors[pt.label] || '#ffffff');
-        sphere.setAttribute('material', `opacity: 0.9; metalness: 0.3; roughness: 0.6`);
+        sphere.setAttribute('radius', String(radius));
+        sphere.setAttribute('color', COLORS[pt.label] || '#ffffff');
+        sphere.setAttribute('material', 'opacity: 0.92; metalness: 0.2; roughness: 0.5');
         sphere.setAttribute('class', 'data-point');
         pointsContainer.appendChild(sphere);
       });
 
-      // Render decision boundary as semi-transparent boxes
-      const step = 5.0 / 30;  // matches grid_steps in backend
+      // Render decision boundary
+      const opacity = parseFloat(document.getElementById('plane-opacity').value);
+      const step = 5.0 / 30;
       planeData.plane.forEach((pt) => {
         const box = document.createElement('a-box');
         box.setAttribute('position', `${pt.x} ${pt.y} ${pt.z}`);
@@ -257,10 +425,50 @@
         box.setAttribute('height', String(step));
         box.setAttribute('depth', String(step));
         box.setAttribute('material',
-          'color: #b48cff; opacity: 0.18; transparent: true; side: double; metalness: 0.1; roughness: 0.8');
+          `color: #b48cff; opacity: ${opacity}; transparent: true; side: double; metalness: 0.05; roughness: 0.9`);
+        box.setAttribute('class', 'plane-cell');
         planeContainer.appendChild(box);
       });
     }
+
+    /* ── Controls ── */
+
+    // Point size slider
+    const pointSizeSlider = document.getElementById('point-size');
+    const pointSizeVal = document.getElementById('point-size-val');
+    pointSizeSlider.addEventListener('input', () => {
+      const val = pointSizeSlider.value;
+      pointSizeVal.textContent = parseFloat(val).toFixed(2);
+      document.querySelectorAll('.data-point').forEach(el => {
+        el.setAttribute('radius', val);
+      });
+    });
+
+    // Plane opacity slider
+    const planeOpSlider = document.getElementById('plane-opacity');
+    const planeOpVal = document.getElementById('plane-opacity-val');
+    planeOpSlider.addEventListener('input', () => {
+      const val = planeOpSlider.value;
+      planeOpVal.textContent = parseFloat(val).toFixed(2);
+      document.querySelectorAll('.plane-cell').forEach(el => {
+        el.setAttribute('material', 'opacity', val);
+      });
+    });
+
+    // Toggle buttons
+    function setupToggle(btnId, targetId) {
+      const btn = document.getElementById(btnId);
+      const target = document.getElementById(targetId);
+      btn.addEventListener('click', () => {
+        btn.classList.toggle('active');
+        const visible = btn.classList.contains('active');
+        target.setAttribute('visible', visible);
+      });
+    }
+
+    setupToggle('toggle-points', 'data-points');
+    setupToggle('toggle-plane', 'decision-boundary');
+    setupToggle('toggle-axes', 'axes-group');
   </script>
 
 </body>
