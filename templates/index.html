@@ -3,12 +3,130 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>3D SVM VR Visualization</title>
+  <title>3D ML VR Visualization</title>
   <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+
+  <!-- ── Register A-Frame components BEFORE the scene ── -->
+  <script>
+    /* Fly controls: Q = up, E = down, Shift = fast */
+    AFRAME.registerComponent('fly-controls', {
+      schema: { speed: { default: 10 } },
+      init() {
+        this.keys = {};
+        this.onKeyDown = e => { this.keys[e.key.toLowerCase()] = true; };
+        this.onKeyUp = e => { this.keys[e.key.toLowerCase()] = false; };
+        window.addEventListener('keydown', this.onKeyDown);
+        window.addEventListener('keyup', this.onKeyUp);
+      },
+      tick(t, dt) {
+        if (!dt) return;
+        const speed = this.data.speed * (dt / 1000);
+        const boost = this.keys['shift'] ? 2.5 : 1;
+        const pos = this.el.object3D.position;
+        if (this.keys['q']) pos.y += speed * boost;
+        if (this.keys['e']) pos.y -= speed * boost;
+      },
+      remove() {
+        window.removeEventListener('keydown', this.onKeyDown);
+        window.removeEventListener('keyup', this.onKeyUp);
+      }
+    });
+
+    /* Hover highlight: scale up + emissive glow on mouseenter */
+    AFRAME.registerComponent('hover-highlight', {
+      schema: {
+        scaleFactor: { default: 1.4 },
+        type: { default: 'sphere' } // 'sphere' or 'cylinder'
+      },
+      init() {
+        this.origScale = null;
+        this.origEmissive = null;
+        this.origRadius = null;
+        this.el.addEventListener('mouseenter', () => this.onEnter());
+        this.el.addEventListener('mouseleave', () => this.onLeave());
+      },
+      onEnter() {
+        const obj = this.el.object3D;
+        this.origScale = { x: obj.scale.x, y: obj.scale.y, z: obj.scale.z };
+        const s = this.data.scaleFactor;
+
+        if (this.data.type === 'cylinder') {
+          // For connections: thicken but don't lengthen
+          obj.scale.set(s, 1, s);
+        } else {
+          obj.scale.set(s, s, s);
+        }
+
+        const mat = this.el.getAttribute('material');
+        if (mat) {
+          this.origEmissive = mat.emissiveIntensity || 0;
+          this.el.setAttribute('material', 'emissiveIntensity', 0.8);
+        }
+      },
+      onLeave() {
+        if (this.origScale) {
+          const obj = this.el.object3D;
+          obj.scale.set(this.origScale.x, this.origScale.y, this.origScale.z);
+        }
+        if (this.origEmissive !== null) {
+          this.el.setAttribute('material', 'emissiveIntensity', this.origEmissive);
+        }
+      }
+    });
+
+    /* Auto-rotate component */
+    AFRAME.registerComponent('auto-rotate', {
+      schema: {
+        speed: { default: 15 },
+        enabled: { default: false }
+      },
+      tick(t, dt) {
+        if (!this.data.enabled) return;
+        this.el.object3D.rotation.y += THREE.MathUtils.degToRad(this.data.speed * dt / 1000);
+      }
+    });
+
+    /* Drag-rotate component: shift+drag to rotate the entity */
+    AFRAME.registerComponent('drag-rotate', {
+      schema: { enabled: { default: false }, sensitivity: { default: 0.4 } },
+      init() {
+        this.dragging = false;
+        this.lastX = 0;
+        this.lastY = 0;
+        const canvas = this.el.sceneEl.canvas;
+
+        this.onDown = (e) => {
+          if (!this.data.enabled) return;
+          this.dragging = true;
+          this.lastX = e.clientX;
+          this.lastY = e.clientY;
+        };
+        this.onMove = (e) => {
+          if (!this.dragging) return;
+          const dx = e.clientX - this.lastX;
+          const dy = e.clientY - this.lastY;
+          this.el.object3D.rotation.y += THREE.MathUtils.degToRad(dx * this.data.sensitivity);
+          this.el.object3D.rotation.x += THREE.MathUtils.degToRad(dy * this.data.sensitivity);
+          this.lastX = e.clientX;
+          this.lastY = e.clientY;
+        };
+        this.onUp = () => { this.dragging = false; };
+
+        // Defer to ensure canvas exists
+        this.el.sceneEl.addEventListener('renderstart', () => {
+          const c = this.el.sceneEl.canvas;
+          c.addEventListener('mousedown', this.onDown);
+          c.addEventListener('mousemove', this.onMove);
+          c.addEventListener('mouseup', this.onUp);
+          c.addEventListener('mouseleave', this.onUp);
+        });
+      }
+    });
+  </script>
+
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
-    /* ── CSS Custom Properties for theming ── */
     :root {
       --bg: #0a0a1a;
       --text: #e0e0e0;
@@ -23,9 +141,6 @@
       --success: #6fdc6f;
       --error: #ff6b6b;
       --warning: #ffd93d;
-      --scene-bg: #0a0a1a;
-      --cube-color: #334466;
-      --floor-color: #223344;
     }
 
     body.light-mode {
@@ -42,9 +157,6 @@
       --success: #2a9d2a;
       --error: #d93636;
       --warning: #c8a000;
-      --scene-bg: #dde2ee;
-      --cube-color: #8899bb;
-      --floor-color: #aabbdd;
     }
 
     body {
@@ -53,7 +165,6 @@
       transition: background 0.4s ease, color 0.4s ease;
     }
 
-    /* ── Panels ── */
     .panel {
       position: fixed; z-index: 9999;
       background: var(--panel-bg); border: 1px solid var(--panel-border);
@@ -62,7 +173,6 @@
       transition: background 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease;
     }
 
-    /* Upload panel */
     #upload-panel { top: 20px; left: 20px; max-width: 340px; }
     #upload-panel .panel-header {
       display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;
@@ -72,29 +182,41 @@
       color: var(--accent); letter-spacing: 0.5px; margin: 0;
     }
 
-    /* Theme toggle */
     #theme-toggle {
       width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--panel-border);
       background: var(--panel-bg); cursor: pointer; font-size: 16px;
       display: flex; align-items: center; justify-content: center;
-      transition: all 0.3s ease;
+      transition: all 0.3s ease; color: var(--text);
     }
     #theme-toggle:hover { transform: scale(1.1); border-color: var(--accent); }
 
-    /* File label */
-    #upload-panel label {
+    #upload-panel label[for="file-input"] {
       display: block; cursor: pointer; text-align: center;
       padding: 14px 20px; border: 2px dashed var(--panel-border);
       border-radius: 8px; color: var(--accent); font-size: 13px;
       transition: all 0.2s ease; margin-bottom: 12px;
     }
-    #upload-panel label:hover {
+    #upload-panel label[for="file-input"]:hover {
       border-color: var(--accent); background: var(--accent-hover);
     }
-    #upload-panel label.has-file { border-color: var(--success); color: var(--success); }
+    #upload-panel label[for="file-input"].has-file { border-color: var(--success); color: var(--success); }
     #file-input { display: none; }
 
-    /* Upload button */
+    .model-selector {
+      display: flex; gap: 4px; margin-bottom: 12px; background: rgba(0,0,0,0.15);
+      border-radius: 8px; padding: 3px;
+    }
+    .model-btn {
+      flex: 1; padding: 7px 4px; border: none; border-radius: 6px;
+      background: transparent; color: var(--text-muted); font-size: 11px;
+      font-weight: 500; cursor: pointer; transition: all 0.2s ease; text-align: center;
+    }
+    .model-btn.active {
+      background: var(--accent); color: #fff;
+      box-shadow: 0 2px 8px rgba(74,124,255,0.3);
+    }
+    .model-btn:hover:not(.active) { color: var(--accent); }
+
     #upload-btn {
       width: 100%; padding: 11px; border: none; border-radius: 8px;
       background: var(--btn-grad); color: #fff;
@@ -104,29 +226,35 @@
     #upload-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 16px var(--btn-shadow); }
     #upload-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; box-shadow: none; }
 
-    /* Status */
     #status { margin-top: 10px; font-size: 12px; min-height: 18px; transition: all 0.3s ease; }
     #status.error { color: var(--error); }
     #status.success { color: var(--success); }
     #status.loading { color: var(--warning); }
 
-    /* Legend */
     #legend {
       bottom: 20px; left: 20px; border-color: var(--panel-border-light);
       font-size: 12px; display: none;
+      transition: bottom 0.3s ease, background 0.4s ease, border-color 0.4s ease;
     }
+    #legend.shifted-up { bottom: 340px; }
     #legend div { margin: 5px 0; display: flex; align-items: center; gap: 8px; color: var(--text); }
     #legend .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
 
-    /* Info panel */
     #info-panel {
       top: 20px; right: 20px; border-color: var(--panel-border-light);
-      font-size: 12px; display: none; min-width: 210px;
+      font-size: 12px; display: none; min-width: 220px;
     }
     #info-panel h3 { color: var(--accent); margin-bottom: 8px; font-size: 13px; font-weight: 600; }
-    #info-panel div { margin: 4px 0; color: var(--text-muted); }
+    #info-panel .info-row { margin: 4px 0; color: var(--text-muted); }
+    #info-panel .info-row strong { color: var(--text); }
+    #info-panel .model-badge {
+      display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px;
+      font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;
+    }
+    .badge-svm { background: rgba(255,68,102,0.2); color: #ff4466; }
+    .badge-lr { background: rgba(68,221,102,0.2); color: #44dd66; }
+    .badge-nn { background: rgba(180,140,255,0.2); color: #b48cff; }
 
-    /* Controls panel */
     #controls-panel {
       bottom: 20px; right: 20px; border-color: var(--panel-border-light);
       font-size: 11px; display: none;
@@ -141,47 +269,144 @@
     }
     #controls-panel .control-row span { min-width: 30px; text-align: right; font-variant-numeric: tabular-nums; }
 
-    /* Toggle buttons row */
-    .toggle-row {
-      display: flex; gap: 6px; margin-top: 8px;
-    }
+    .toggle-row { display: flex; gap: 5px; margin-top: 8px; flex-wrap: wrap; }
     .toggle-btn {
-      flex: 1; padding: 6px 8px; border: 1px solid var(--panel-border);
+      flex: 1; padding: 6px 6px; border: 1px solid var(--panel-border);
       border-radius: 6px; background: transparent; color: var(--text-muted);
-      font-size: 11px; cursor: pointer; transition: all 0.2s ease; text-align: center;
+      font-size: 10px; cursor: pointer; transition: all 0.2s ease; text-align: center;
+      min-width: 42px;
     }
     .toggle-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
     .toggle-btn:hover:not(.active) { border-color: var(--accent); color: var(--accent); }
 
-    /* Animations */
+    /* ── 3D Tooltip overlay ── */
+    #tooltip-3d {
+      position: fixed; z-index: 10000; pointer-events: none;
+      background: var(--panel-bg); border: 1px solid var(--accent);
+      border-radius: 8px; padding: 10px 14px; backdrop-filter: blur(14px);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+      font-size: 11px; color: var(--text); display: none;
+      max-width: 220px; line-height: 1.5;
+      transition: opacity 0.15s ease;
+    }
+    #tooltip-3d .tt-title {
+      font-weight: 600; color: var(--accent); margin-bottom: 4px; font-size: 12px;
+    }
+    #tooltip-3d .tt-row { color: var(--text-muted); }
+    #tooltip-3d .tt-row strong { color: var(--text); }
+    #tooltip-3d .tt-divider {
+      height: 1px; background: var(--panel-border); margin: 5px 0;
+    }
+    #tooltip-3d.pinned {
+      pointer-events: auto; border-color: var(--success);
+      box-shadow: 0 4px 20px rgba(111,220,111,0.2);
+    }
+    #tooltip-3d.pinned .tt-pin-hint { display: none; }
+    .tt-pin-hint { font-size: 9px; color: var(--text-muted); opacity: 0.6; margin-top: 4px; }
+
+    /* Training animation panel */
+    #train-panel {
+      bottom: 120px; left: 20px;
+      border-color: rgba(180,140,255,0.4); display: none;
+      min-width: 300px; max-width: 340px; text-align: center;
+    }
+    #train-panel h3 { color: #b48cff; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
+    #train-panel .train-stats {
+      display: flex; justify-content: space-around; margin: 10px 0; font-size: 12px;
+    }
+    #train-panel .train-stat { text-align: center; }
+    #train-panel .train-stat .stat-val {
+      font-size: 18px; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums;
+    }
+    #train-panel .train-stat .stat-label { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+    #train-progress-bar {
+      width: 100%; height: 6px; background: rgba(100,100,150,0.2);
+      border-radius: 3px; overflow: hidden; margin: 10px 0;
+    }
+    #train-progress-fill {
+      height: 100%; background: linear-gradient(90deg, #b48cff, #4499ff);
+      border-radius: 3px; width: 0%; transition: width 0.15s ease;
+    }
+    .train-controls { display: flex; gap: 6px; margin-top: 10px; }
+    .train-ctrl-btn {
+      flex: 1; padding: 8px; border: 1px solid var(--panel-border);
+      border-radius: 6px; background: transparent; color: var(--text);
+      font-size: 12px; cursor: pointer; transition: all 0.2s ease;
+    }
+    .train-ctrl-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .train-ctrl-btn.primary {
+      background: var(--btn-grad); color: #fff; border: none;
+    }
+    .train-ctrl-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    #train-speed {
+      width: 100%; accent-color: #b48cff; margin-top: 6px; height: 4px; cursor: pointer;
+    }
+    .speed-label { font-size: 10px; color: var(--text-muted); margin-top: 4px; }
+
     @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
     .fade-in { animation: fadeIn 0.4s ease forwards; }
-
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
     .loading-pulse { animation: pulse 1.2s ease infinite; }
   </style>
 </head>
 <body>
 
+  <!-- 3D Tooltip (HTML overlay, positioned via JS) -->
+  <div id="tooltip-3d"></div>
+
   <!-- Upload Panel -->
   <div id="upload-panel" class="panel">
     <div class="panel-header">
-      <h2>SVM VR Visualizer</h2>
+      <h2>ML VR Visualizer</h2>
       <button id="theme-toggle" title="Toggle light/dark mode">&#9790;</button>
     </div>
     <label id="file-label" for="file-input">
       Click to select dataset (.json)
     </label>
     <input type="file" id="file-input" accept=".json" />
+    <div class="model-selector">
+      <button class="model-btn active" data-model="svm">SVM</button>
+      <button class="model-btn" data-model="linear_regression">Linear Reg</button>
+      <button class="model-btn" data-model="neural_network">Neural Net</button>
+    </div>
     <button id="upload-btn" disabled>Visualize</button>
+    <button id="train-live-btn" disabled style="width:100%; padding:9px; border:1px solid rgba(180,140,255,0.4); border-radius:8px; background:transparent; color:#b48cff; font-size:12px; font-weight:600; cursor:pointer; margin-top:6px; transition:all 0.2s ease;">Train Live (NN)</button>
     <div id="status"></div>
+  </div>
+
+  <!-- Training Animation Panel -->
+  <div id="train-panel" class="panel">
+    <h3>Neural Network Training</h3>
+    <div class="train-stats">
+      <div class="train-stat">
+        <div class="stat-val" id="train-epoch">0</div>
+        <div class="stat-label">Epoch</div>
+      </div>
+      <div class="train-stat">
+        <div class="stat-val" id="train-acc">0%</div>
+        <div class="stat-label">Accuracy</div>
+      </div>
+      <div class="train-stat">
+        <div class="stat-val" id="train-loss">-</div>
+        <div class="stat-label">Loss</div>
+      </div>
+    </div>
+    <div id="train-progress-bar"><div id="train-progress-fill"></div></div>
+    <div class="train-controls">
+      <button class="train-ctrl-btn" id="train-prev" disabled>&lt; Prev</button>
+      <button class="train-ctrl-btn primary" id="train-play">Play</button>
+      <button class="train-ctrl-btn" id="train-next" disabled>Next &gt;</button>
+      <button class="train-ctrl-btn" id="train-close">Close</button>
+    </div>
+    <input type="range" id="train-speed" min="100" max="2000" value="500" step="100" />
+    <div class="speed-label">Speed: <span id="train-speed-val">500</span>ms / frame</div>
   </div>
 
   <!-- Legend -->
   <div id="legend" class="panel">
     <div><span class="dot" style="background:#ff4466;"></span> Class 0</div>
     <div><span class="dot" style="background:#4499ff;"></span> Class 1</div>
-    <div><span class="dot" style="background:rgba(180,140,255,0.6);"></span> Decision Boundary</div>
+    <div><span class="dot" style="background:rgba(180,140,255,0.6);"></span> <span id="legend-boundary-text">Decision Boundary</span></div>
   </div>
 
   <!-- Info Panel -->
@@ -199,71 +424,225 @@
       <span id="point-size-val">0.08</span>
     </div>
     <div class="control-row">
-      <label>Plane Alpha</label>
+      <label>Boundary</label>
       <input type="range" id="plane-opacity" min="0.05" max="0.6" step="0.01" value="0.18" />
       <span id="plane-opacity-val">0.18</span>
     </div>
     <div class="toggle-row">
       <button class="toggle-btn active" id="toggle-points">Points</button>
-      <button class="toggle-btn active" id="toggle-plane">Plane</button>
+      <button class="toggle-btn active" id="toggle-plane">Boundary</button>
       <button class="toggle-btn active" id="toggle-axes">Axes</button>
+      <button class="toggle-btn active" id="toggle-env">Env</button>
+      <button class="toggle-btn" id="toggle-nn" style="display:none">NN</button>
+    </div>
+    <div class="toggle-row" style="margin-top: 6px;">
+      <button class="toggle-btn" id="toggle-rotate">Rotate</button>
+      <button class="toggle-btn" id="toggle-drag">Drag</button>
     </div>
   </div>
 
   <!-- A-Frame Scene -->
   <a-scene id="vr-scene" vr-mode-ui="enabled: true" embedded
+    fog="type: exponential; color: #020208; density: 0.006"
     style="position: fixed; top: 0; left: 0; width: 100%; height: 100%;">
 
-    <!-- Sky -->
-    <a-sky id="scene-sky" color="#0a0a1a"></a-sky>
+    <a-sky id="scene-sky" color="#020208"></a-sky>
+    <a-entity id="scene-fog"></a-entity>
 
-    <!-- Camera -->
-    <a-entity id="rig" position="0 2 8">
-      <a-camera wasd-controls="acceleration: 20" look-controls="pointerLockEnabled: false">
-        <a-cursor color="#8ab4ff" fuse="false" raycaster="objects: .data-point"></a-cursor>
+    <a-entity id="rig" position="0 2 8" fly-controls="speed: 10">
+      <a-camera id="main-camera" wasd-controls="acceleration: 20; fly: true" look-controls="pointerLockEnabled: false">
+        <a-cursor color="#8ab4ff" fuse="false"
+          raycaster="objects: .interactive; far: 50"></a-cursor>
       </a-camera>
     </a-entity>
 
-    <!-- Lighting -->
     <a-light id="light-ambient" type="ambient" color="#445566" intensity="0.6"></a-light>
     <a-light type="directional" color="#ffffff" intensity="0.8" position="2 4 3"></a-light>
     <a-light type="directional" color="#6688cc" intensity="0.3" position="-3 2 -2"></a-light>
     <a-light type="point" color="#ffffff" intensity="0.2" position="0 3 0"></a-light>
+    <a-light type="point" color="#334488" intensity="0.15" position="0 -3 0" distance="30"></a-light>
+    <a-light type="point" color="#443366" intensity="0.1" position="-10 5 -15" distance="40"></a-light>
 
-    <!-- Coordinate System Container -->
-    <a-entity id="coord-system" position="0 0 0">
+    <!-- VR Environment -->
+    <a-entity id="environment-group">
 
-      <!-- Bounding Cube (wireframe) -->
+      <!-- ══════════ GROUND: dark reflective floor ══════════ -->
+      <a-plane id="ground-plane" position="0 -4 0" rotation="-90 0 0" width="300" height="300"
+        material="color: #030308; metalness: 0.9; roughness: 0.1; opacity: 0.98"></a-plane>
+
+      <!-- ══════════ NEON GRID on ground ══════════ -->
+      <a-entity id="ground-grid" position="0 -3.96 0" rotation="-90 0 0">
+        <a-box position="-20 0 0" width="0.015" height="80" depth="0.003" material="color: #0a1540; opacity: 0.4; emissive: #0a1540; emissiveIntensity: 0.3"></a-box>
+        <a-box position="-10 0 0" width="0.015" height="80" depth="0.003" material="color: #0e1d55; opacity: 0.5; emissive: #0e1d55; emissiveIntensity: 0.4"></a-box>
+        <a-box position="0 0 0"   width="0.025" height="80" depth="0.003" material="color: #1a3399; opacity: 0.7; emissive: #1a3399; emissiveIntensity: 0.6"></a-box>
+        <a-box position="10 0 0"  width="0.015" height="80" depth="0.003" material="color: #0e1d55; opacity: 0.5; emissive: #0e1d55; emissiveIntensity: 0.4"></a-box>
+        <a-box position="20 0 0"  width="0.015" height="80" depth="0.003" material="color: #0a1540; opacity: 0.4; emissive: #0a1540; emissiveIntensity: 0.3"></a-box>
+        <a-box position="0 -20 0" width="80" height="0.015" depth="0.003" material="color: #0a1540; opacity: 0.4; emissive: #0a1540; emissiveIntensity: 0.3"></a-box>
+        <a-box position="0 -10 0" width="80" height="0.015" depth="0.003" material="color: #0e1d55; opacity: 0.5; emissive: #0e1d55; emissiveIntensity: 0.4"></a-box>
+        <a-box position="0 0 0"   width="80" height="0.025" depth="0.003" material="color: #1a3399; opacity: 0.7; emissive: #1a3399; emissiveIntensity: 0.6"></a-box>
+        <a-box position="0 10 0"  width="80" height="0.015" depth="0.003" material="color: #0e1d55; opacity: 0.5; emissive: #0e1d55; emissiveIntensity: 0.4"></a-box>
+        <a-box position="0 20 0"  width="80" height="0.015" depth="0.003" material="color: #0a1540; opacity: 0.4; emissive: #0a1540; emissiveIntensity: 0.3"></a-box>
+        <a-box position="-15 0 0" width="0.006" height="60" depth="0.002" material="color: #081030; opacity: 0.2; emissive: #081030; emissiveIntensity: 0.2"></a-box>
+        <a-box position="-5 0 0"  width="0.006" height="60" depth="0.002" material="color: #081030; opacity: 0.2; emissive: #081030; emissiveIntensity: 0.2"></a-box>
+        <a-box position="5 0 0"   width="0.006" height="60" depth="0.002" material="color: #081030; opacity: 0.2; emissive: #081030; emissiveIntensity: 0.2"></a-box>
+        <a-box position="15 0 0"  width="0.006" height="60" depth="0.002" material="color: #081030; opacity: 0.2; emissive: #081030; emissiveIntensity: 0.2"></a-box>
+        <a-box position="0 -15 0" width="60" height="0.006" depth="0.002" material="color: #081030; opacity: 0.2; emissive: #081030; emissiveIntensity: 0.2"></a-box>
+        <a-box position="0 -5 0"  width="60" height="0.006" depth="0.002" material="color: #081030; opacity: 0.2; emissive: #081030; emissiveIntensity: 0.2"></a-box>
+        <a-box position="0 5 0"   width="60" height="0.006" depth="0.002" material="color: #081030; opacity: 0.2; emissive: #081030; emissiveIntensity: 0.2"></a-box>
+        <a-box position="0 15 0"  width="60" height="0.006" depth="0.002" material="color: #081030; opacity: 0.2; emissive: #081030; emissiveIntensity: 0.2"></a-box>
+      </a-entity>
+
+      <!-- ══════════ PULSING PLATFORM RINGS ══════════ -->
+      <a-torus position="0 -3.92 0" rotation="90 0 0" radius="3.2" radius-tubular="0.02"
+        material="color: #2255ff; opacity: 0.25; emissive: #2255ff; emissiveIntensity: 0.8"
+        animation="property: material.emissiveIntensity; from: 0.5; to: 1.0; dur: 3000; dir: alternate; loop: true"></a-torus>
+      <a-torus position="0 -3.92 0" rotation="90 0 0" radius="5" radius-tubular="0.016"
+        material="color: #3366ee; opacity: 0.2; emissive: #3366ee; emissiveIntensity: 0.6"
+        animation="property: material.emissiveIntensity; from: 0.4; to: 0.8; dur: 4000; dir: alternate; loop: true"></a-torus>
+      <a-torus position="0 -3.92 0" rotation="90 0 0" radius="7.5" radius-tubular="0.012"
+        material="color: #2244bb; opacity: 0.15; emissive: #2244bb; emissiveIntensity: 0.5"></a-torus>
+      <a-torus position="0 -3.92 0" rotation="90 0 0" radius="11" radius-tubular="0.01"
+        material="color: #1a3399; opacity: 0.1; emissive: #1a3399; emissiveIntensity: 0.4"></a-torus>
+      <a-torus position="0 -3.92 0" rotation="90 0 0" radius="16" radius-tubular="0.008"
+        material="color: #112277; opacity: 0.06; emissive: #112277; emissiveIntensity: 0.3"></a-torus>
+
+      <!-- glow disc under cube -->
+      <a-circle position="0 -3.94 0" rotation="-90 0 0" radius="4"
+        material="color: #1133aa; opacity: 0.12; emissive: #2244dd; emissiveIntensity: 0.5; side: double"></a-circle>
+
+      <!-- ══════════ CORNER BEACON PILLARS ══════════ -->
+      <a-entity position="-14 -1 -14">
+        <a-cylinder radius="0.025" height="14" material="color: #1133aa; opacity: 0.08; emissive: #1133cc; emissiveIntensity: 0.5"></a-cylinder>
+        <a-sphere position="0 7 0" radius="0.06" material="color: #4488ff; opacity: 0.5; emissive: #4488ff; emissiveIntensity: 1.0"
+          animation="property: material.emissiveIntensity; from: 0.6; to: 1.0; dur: 2500; dir: alternate; loop: true"></a-sphere>
+      </a-entity>
+      <a-entity position="14 -1 -14">
+        <a-cylinder radius="0.025" height="14" material="color: #2211aa; opacity: 0.08; emissive: #3311cc; emissiveIntensity: 0.5"></a-cylinder>
+        <a-sphere position="0 7 0" radius="0.06" material="color: #8844ff; opacity: 0.5; emissive: #8844ff; emissiveIntensity: 1.0"
+          animation="property: material.emissiveIntensity; from: 0.6; to: 1.0; dur: 3200; dir: alternate; loop: true"></a-sphere>
+      </a-entity>
+      <a-entity position="-14 -1 14">
+        <a-cylinder radius="0.025" height="14" material="color: #1133aa; opacity: 0.08; emissive: #1133cc; emissiveIntensity: 0.5"></a-cylinder>
+        <a-sphere position="0 7 0" radius="0.06" material="color: #44aaff; opacity: 0.5; emissive: #44aaff; emissiveIntensity: 1.0"
+          animation="property: material.emissiveIntensity; from: 0.6; to: 1.0; dur: 2800; dir: alternate; loop: true"></a-sphere>
+      </a-entity>
+      <a-entity position="14 -1 14">
+        <a-cylinder radius="0.025" height="14" material="color: #2211aa; opacity: 0.08; emissive: #3311cc; emissiveIntensity: 0.5"></a-cylinder>
+        <a-sphere position="0 7 0" radius="0.06" material="color: #aa44ff; opacity: 0.5; emissive: #aa44ff; emissiveIntensity: 1.0"
+          animation="property: material.emissiveIntensity; from: 0.6; to: 1.0; dur: 3600; dir: alternate; loop: true"></a-sphere>
+      </a-entity>
+
+      <!-- ══════════ AURORA BANDS (distant, subtle glow ribbons) ══════════ -->
+      <a-plane position="0 30 -80" rotation="8 0 0" width="120" height="4"
+        material="color: #000000; opacity: 0; emissive: #22ddaa; emissiveIntensity: 0.15; side: double; transparent: true"
+        animation="property: material.emissiveIntensity; from: 0.08; to: 0.2; dur: 5000; dir: alternate; loop: true"
+        animation__pos="property: position; from: -5 30 -80; to: 5 31 -80; dur: 15000; dir: alternate; loop: true; easing: easeInOutSine"></a-plane>
+      <a-plane position="0 34 -90" rotation="5 10 3" width="130" height="3"
+        material="color: #000000; opacity: 0; emissive: #6644dd; emissiveIntensity: 0.12; side: double; transparent: true"
+        animation="property: material.emissiveIntensity; from: 0.06; to: 0.16; dur: 7000; dir: alternate; loop: true"
+        animation__pos="property: position; from: 4 34 -90; to: -4 33 -90; dur: 18000; dir: alternate; loop: true; easing: easeInOutSine"></a-plane>
+      <a-plane position="0 26 -70" rotation="12 -5 -2" width="90" height="3"
+        material="color: #000000; opacity: 0; emissive: #2288ff; emissiveIntensity: 0.1; side: double; transparent: true"
+        animation="property: material.emissiveIntensity; from: 0.05; to: 0.14; dur: 6000; dir: alternate; loop: true"
+        animation__pos="property: position; from: -3 26 -70; to: 3 27 -70; dur: 12000; dir: alternate; loop: true; easing: easeInOutSine"></a-plane>
+
+      <!-- ══════════ FLOATING WIREFRAME SHAPES (bobbing + spinning) ══════════ -->
+      <a-entity position="-28 8 -25"
+        animation="property: rotation; to: 360 360 0; dur: 40000; loop: true; easing: linear"
+        animation__bob="property: position; from: -28 7 -25; to: -28 9 -25; dur: 10000; dir: alternate; loop: true; easing: easeInOutSine">
+        <a-icosahedron radius="0.5" material="color: #3344aa; wireframe: true; opacity: 0.15; emissive: #3344aa; emissiveIntensity: 0.5"></a-icosahedron>
+      </a-entity>
+      <a-entity position="25 10 -30"
+        animation="property: rotation; to: 0 360 360; dur: 50000; loop: true; easing: linear"
+        animation__bob="property: position; from: 25 9 -30; to: 25 11 -30; dur: 12000; dir: alternate; loop: true; easing: easeInOutSine">
+        <a-octahedron radius="0.4" material="color: #6644bb; wireframe: true; opacity: 0.12; emissive: #6644bb; emissiveIntensity: 0.45"></a-octahedron>
+      </a-entity>
+      <a-entity position="-22 12 -35"
+        animation="property: rotation; to: 360 0 360; dur: 45000; loop: true; easing: linear"
+        animation__bob="property: position; from: -22 11 -35; to: -22 13 -35; dur: 11000; dir: alternate; loop: true; easing: easeInOutSine">
+        <a-dodecahedron radius="0.35" material="color: #4488cc; wireframe: true; opacity: 0.1; emissive: #4488cc; emissiveIntensity: 0.4"></a-dodecahedron>
+      </a-entity>
+      <a-entity position="30 6 -22"
+        animation="property: rotation; to: 180 360 180; dur: 35000; loop: true; easing: linear"
+        animation__bob="property: position; from: 30 5 -22; to: 30 7 -22; dur: 9000; dir: alternate; loop: true; easing: easeInOutSine">
+        <a-tetrahedron radius="0.3" material="color: #aa4488; wireframe: true; opacity: 0.08; emissive: #aa4488; emissiveIntensity: 0.35"></a-tetrahedron>
+      </a-entity>
+      <a-entity position="0 15 -45"
+        animation="property: rotation; to: 360 180 0; dur: 55000; loop: true; easing: linear"
+        animation__bob="property: position; from: 0 14 -45; to: 0 16 -45; dur: 14000; dir: alternate; loop: true; easing: easeInOutSine">
+        <a-icosahedron radius="0.7" material="color: #2266bb; wireframe: true; opacity: 0.08; emissive: #2266bb; emissiveIntensity: 0.35"></a-icosahedron>
+      </a-entity>
+
+      <!-- ══════════ ORBITING RINGS ══════════ -->
+      <a-entity position="0 0 0"
+        animation="property: rotation; to: 0 360 0; dur: 60000; loop: true; easing: linear">
+        <a-torus position="0 1 0" rotation="70 0 0" radius="8" radius-tubular="0.015"
+          material="color: #3366ff; opacity: 0.1; emissive: #3366ff; emissiveIntensity: 0.4"></a-torus>
+      </a-entity>
+      <a-entity position="0 0 0"
+        animation="property: rotation; to: 0 -360 0; dur: 45000; loop: true; easing: linear">
+        <a-torus position="0 2 0" rotation="50 30 0" radius="10.5" radius-tubular="0.012"
+          material="color: #4455cc; opacity: 0.07; emissive: #4455cc; emissiveIntensity: 0.3"></a-torus>
+      </a-entity>
+      <a-entity position="0 0 0"
+        animation="property: rotation; to: 0 360 0; dur: 80000; loop: true; easing: linear">
+        <a-torus position="0 -1 0" rotation="85 45 0" radius="14" radius-tubular="0.008"
+          material="color: #3344aa; opacity: 0.04; emissive: #3344aa; emissiveIntensity: 0.2"></a-torus>
+      </a-entity>
+
+      <!-- ══════════ VERTICAL LIGHT BEAMS ══════════ -->
+      <a-cylinder position="-15 8 -30" radius="0.02" height="35"
+        material="color: #0000ff; opacity: 0.06; emissive: #3355ff; emissiveIntensity: 0.5"></a-cylinder>
+      <a-cylinder position="18 8 -35" radius="0.02" height="35"
+        material="color: #4400ff; opacity: 0.05; emissive: #5533ff; emissiveIntensity: 0.45"></a-cylinder>
+      <a-cylinder position="0 12 -45" radius="0.025" height="45"
+        material="color: #2244ff; opacity: 0.04; emissive: #3366ff; emissiveIntensity: 0.4"></a-cylinder>
+      <a-cylinder position="-25 6 -20" radius="0.015" height="28"
+        material="color: #3300cc; opacity: 0.04; emissive: #4422dd; emissiveIntensity: 0.4"></a-cylinder>
+      <a-cylinder position="28 6 -18" radius="0.015" height="28"
+        material="color: #2233cc; opacity: 0.04; emissive: #3344dd; emissiveIntensity: 0.4"></a-cylinder>
+
+      <!-- ══════════ FLOATING ENERGY ORBS (small, bright, scattered) ══════════ -->
+      <a-sphere position="-8 5 -12" radius="0.03" material="color: #4488ff; emissive: #4488ff; emissiveIntensity: 1.0; opacity: 0.8"
+        animation="property: position; from: -8 4.5 -12; to: -8 5.5 -12; dur: 4000; dir: alternate; loop: true; easing: easeInOutSine"></a-sphere>
+      <a-sphere position="10 7 -15" radius="0.025" material="color: #88aaff; emissive: #88aaff; emissiveIntensity: 1.0; opacity: 0.7"
+        animation="property: position; from: 10 6.5 -15; to: 10 7.5 -15; dur: 5000; dir: alternate; loop: true; easing: easeInOutSine"></a-sphere>
+      <a-sphere position="-5 3 8" radius="0.02" material="color: #66ffbb; emissive: #66ffbb; emissiveIntensity: 0.9; opacity: 0.6"
+        animation="property: position; from: -5 2.5 8; to: -5 3.5 8; dur: 3500; dir: alternate; loop: true; easing: easeInOutSine"></a-sphere>
+      <a-sphere position="12 4 6" radius="0.025" material="color: #ff6688; emissive: #ff6688; emissiveIntensity: 0.9; opacity: 0.6"
+        animation="property: position; from: 12 3.5 6; to: 12 4.5 6; dur: 4500; dir: alternate; loop: true; easing: easeInOutSine"></a-sphere>
+      <a-sphere position="-15 8 -8" radius="0.035" material="color: #aa66ff; emissive: #aa66ff; emissiveIntensity: 1.0; opacity: 0.7"
+        animation="property: position; from: -15 7.5 -8; to: -15 8.5 -8; dur: 5500; dir: alternate; loop: true; easing: easeInOutSine"></a-sphere>
+      <a-sphere position="6 9 -20" radius="0.02" material="color: #ffaa44; emissive: #ffaa44; emissiveIntensity: 0.8; opacity: 0.6"
+        animation="property: position; from: 6 8.5 -20; to: 6 9.5 -20; dur: 3800; dir: alternate; loop: true; easing: easeInOutSine"></a-sphere>
+      <a-sphere position="-20 6 -18" radius="0.03" material="color: #44ddff; emissive: #44ddff; emissiveIntensity: 1.0; opacity: 0.7"
+        animation="property: position; from: -20 5.5 -18; to: -20 6.5 -18; dur: 4200; dir: alternate; loop: true; easing: easeInOutSine"></a-sphere>
+      <a-sphere position="20 3 10" radius="0.02" material="color: #ff44aa; emissive: #ff44aa; emissiveIntensity: 0.9; opacity: 0.6"
+        animation="property: position; from: 20 2.5 10; to: 20 3.5 10; dur: 3200; dir: alternate; loop: true; easing: easeInOutSine"></a-sphere>
+
+      <!-- ══════════ PROCEDURAL STAR FIELD (tiny dots, generated by JS) ══════════ -->
+      <a-entity id="starfield-container"></a-entity>
+
+    </a-entity>
+
+    <!-- Coordinate System (with auto-rotate and drag-rotate) -->
+    <a-entity id="coord-system" position="0 0 0"
+      auto-rotate="enabled: false; speed: 15"
+      drag-rotate="enabled: false; sensitivity: 0.4">
+
       <a-box id="bounding-cube" position="0 0 0" width="5" height="5" depth="5"
         material="color: #334466; wireframe: true; opacity: 0.3"></a-box>
 
-      <!-- Axes group -->
       <a-entity id="axes-group">
-        <!-- X Axis (Red) -->
-        <a-cylinder position="0 0 0" radius="0.02" height="5"
-          rotation="0 0 90" color="#ff4466" material="opacity: 0.7"></a-cylinder>
-        <a-cone position="2.6 0 0" radius-bottom="0.06" height="0.2"
-          rotation="0 0 -90" color="#ff4466"></a-cone>
-        <a-text value="X" position="2.85 0.18 0" color="#ff4466" scale="0.7 0.7 0.7"
-          align="center"></a-text>
-
-        <!-- Y Axis (Green) - vertical -->
-        <a-cylinder position="0 0 0" radius="0.02" height="5"
-          rotation="0 0 0" color="#44dd66" material="opacity: 0.7"></a-cylinder>
-        <a-cone position="0 2.6 0" radius-bottom="0.06" height="0.2"
-          rotation="0 0 0" color="#44dd66"></a-cone>
-        <a-text value="Y" position="0.18 2.85 0" color="#44dd66" scale="0.7 0.7 0.7"
-          align="center"></a-text>
-
-        <!-- Z Axis (Blue) -->
-        <a-cylinder position="0 0 0" radius="0.02" height="5"
-          rotation="90 0 0" color="#4499ff" material="opacity: 0.7"></a-cylinder>
-        <a-cone position="0 0 2.6" radius-bottom="0.06" height="0.2"
-          rotation="-90 0 0" color="#4499ff"></a-cone>
-        <a-text value="Z" position="0 0.18 2.85" color="#4499ff" scale="0.7 0.7 0.7"
-          align="center"></a-text>
-
-        <!-- Tick marks on axes -->
+        <a-cylinder position="0 0 0" radius="0.02" height="5" rotation="0 0 90" color="#ff4466" material="opacity: 0.7"></a-cylinder>
+        <a-cone position="2.6 0 0" radius-bottom="0.06" height="0.2" rotation="0 0 -90" color="#ff4466"></a-cone>
+        <a-text value="X" position="2.85 0.18 0" color="#ff4466" scale="0.7 0.7 0.7" align="center"></a-text>
+        <a-cylinder position="0 0 0" radius="0.02" height="5" rotation="0 0 0" color="#44dd66" material="opacity: 0.7"></a-cylinder>
+        <a-cone position="0 2.6 0" radius-bottom="0.06" height="0.2" rotation="0 0 0" color="#44dd66"></a-cone>
+        <a-text value="Y" position="0.18 2.85 0" color="#44dd66" scale="0.7 0.7 0.7" align="center"></a-text>
+        <a-cylinder position="0 0 0" radius="0.02" height="5" rotation="90 0 0" color="#4499ff" material="opacity: 0.7"></a-cylinder>
+        <a-cone position="0 0 2.6" radius-bottom="0.06" height="0.2" rotation="-90 0 0" color="#4499ff"></a-cone>
+        <a-text value="Z" position="0 0.18 2.85" color="#4499ff" scale="0.7 0.7 0.7" align="center"></a-text>
         <a-text value="-2" position="-2 -0.25 0" color="#ff4466" scale="0.4 0.4 0.4" align="center"></a-text>
         <a-text value="2" position="2 -0.25 0" color="#ff4466" scale="0.4 0.4 0.4" align="center"></a-text>
         <a-text value="-2" position="-0.25 -2 0" color="#44dd66" scale="0.4 0.4 0.4" align="center"></a-text>
@@ -272,22 +651,114 @@
         <a-text value="2" position="0 -0.25 2" color="#4499ff" scale="0.4 0.4 0.4" align="center"></a-text>
       </a-entity>
 
-      <!-- Grid floor (subtle) -->
       <a-plane position="0 -2.5 0" rotation="-90 0 0" width="5" height="5"
         material="color: #223344; opacity: 0.12; side: double"></a-plane>
 
-      <!-- Data points container -->
       <a-entity id="data-points"></a-entity>
-
-      <!-- Decision boundary container -->
       <a-entity id="decision-boundary"></a-entity>
+    </a-entity>
 
+    <!-- ══════════ BYTE REALITY 3D Title ══════════ -->
+    <a-entity id="title-group" position="0 4.5 -4">
+      <!-- Main title text -->
+      <a-text value="BYTE REALITY" position="0 0 0" color="#8ab4ff"
+        align="center" scale="5 5 5" font="mozillavr"
+        animation="property: position; from: 0 -0.08 0; to: 0 0.08 0; dur: 4000; dir: alternate; loop: true; easing: easeInOutSine"></a-text>
+      <!-- Glow duplicate behind for bloom effect -->
+      <a-text value="BYTE REALITY" position="0 0 -0.05" color="#4466cc"
+        align="center" scale="5.1 5.1 5.1" font="mozillavr"
+        material="opacity: 0.3"
+        animation="property: position; from: 0 -0.08 -0.05; to: 0 0.08 -0.05; dur: 4000; dir: alternate; loop: true; easing: easeInOutSine"></a-text>
+      <!-- Subtitle -->
+      <a-text value="Machine Learning VR Visualizer" position="0 -0.7 0" color="#6688cc"
+        align="center" scale="1.5 1.5 1.5" font="mozillavr"></a-text>
+      <!-- Decorative line under title -->
+      <a-box position="0 -1.0 0" width="8" height="0.025" depth="0.025"
+        material="color: #4466cc; emissive: #4466cc; emissiveIntensity: 0.6; opacity: 0.5"
+        animation="property: material.emissiveIntensity; from: 0.3; to: 0.8; dur: 2500; dir: alternate; loop: true"></a-box>
+      <!-- Small accent dots on ends of the line -->
+      <a-sphere position="-4 -1.0 0" radius="0.05" material="color: #8ab4ff; emissive: #8ab4ff; emissiveIntensity: 0.8; opacity: 0.7"></a-sphere>
+      <a-sphere position="4 -1.0 0" radius="0.05" material="color: #8ab4ff; emissive: #8ab4ff; emissiveIntensity: 0.8; opacity: 0.7"></a-sphere>
+    </a-entity>
+
+    <!-- Neural Network 3D (above the cube) -->
+    <a-entity id="nn-container" position="0 7 0" visible="false">
+      <a-text value="Neural Network Architecture" position="0 3.2 0" color="#b48cff"
+        align="center" scale="1.2 1.2 1.2" font="mozillavr"></a-text>
+      <a-box position="0 0.5 0" width="10" height="5" depth="2"
+        material="color: #1a1a3a; wireframe: true; opacity: 0.12"></a-box>
+      <a-entity id="nn-neurons"></a-entity>
+      <a-entity id="nn-connections"></a-entity>
+      <a-entity id="nn-labels"></a-entity>
     </a-entity>
 
   </a-scene>
 
   <script>
-    /* ── Theme Management ── */
+    /* ══════════════ Tooltip System ══════════════ */
+    const tooltip = document.getElementById('tooltip-3d');
+    let tooltipPinned = false;
+    let tooltipTarget = null;
+
+    function showTooltip(el, html, event) {
+      if (tooltipPinned && tooltipTarget !== el) return; // don't override pinned
+
+      tooltip.innerHTML = html;
+      tooltip.style.display = 'block';
+
+      // Position near cursor
+      const rect = document.body.getBoundingClientRect();
+      let x, y;
+      if (event && event.clientX !== undefined) {
+        x = event.clientX + 15;
+        y = event.clientY - 10;
+      } else {
+        // Fallback: project 3D position to screen
+        const pos = el.object3D.getWorldPosition(new THREE.Vector3());
+        const camera = document.getElementById('main-camera').getObject3D('camera');
+        const canvas = document.querySelector('canvas');
+        pos.project(camera);
+        x = (pos.x * 0.5 + 0.5) * canvas.clientWidth + 15;
+        y = (-pos.y * 0.5 + 0.5) * canvas.clientHeight - 10;
+      }
+
+      // Keep on screen
+      x = Math.min(x, window.innerWidth - 240);
+      y = Math.max(y, 10);
+      y = Math.min(y, window.innerHeight - 100);
+
+      tooltip.style.left = x + 'px';
+      tooltip.style.top = y + 'px';
+    }
+
+    function hideTooltip(el) {
+      if (tooltipPinned && tooltipTarget === el) return;
+      tooltip.style.display = 'none';
+    }
+
+    function pinTooltip(el) {
+      if (tooltipPinned && tooltipTarget === el) {
+        // Unpin
+        tooltipPinned = false;
+        tooltipTarget = null;
+        tooltip.classList.remove('pinned');
+        tooltip.style.display = 'none';
+      } else {
+        tooltipPinned = true;
+        tooltipTarget = el;
+        tooltip.classList.add('pinned');
+      }
+    }
+
+    // Click anywhere else to unpin
+    document.addEventListener('click', (e) => {
+      if (tooltipPinned && !tooltip.contains(e.target)) {
+        // Check if click is on canvas (3D scene)
+        if (e.target.tagName === 'CANVAS') return; // let A-Frame handle it
+      }
+    });
+
+    /* ══════════════ Theme ══════════════ */
     const body = document.body;
     const themeToggle = document.getElementById('theme-toggle');
     let isDark = true;
@@ -296,28 +767,153 @@
       const sky = document.getElementById('scene-sky');
       const cube = document.getElementById('bounding-cube');
       const ambient = document.getElementById('light-ambient');
+      const ground = document.getElementById('ground-plane');
+      const scene = document.getElementById('vr-scene');
 
       if (isDark) {
         body.classList.remove('light-mode');
-        themeToggle.innerHTML = '&#9790;';  // moon
-        sky.setAttribute('color', '#0a0a1a');
+        themeToggle.innerHTML = '&#9790;';
+        sky.setAttribute('color', '#020208');
         cube.setAttribute('material', 'color: #334466; wireframe: true; opacity: 0.3');
         ambient.setAttribute('intensity', '0.6');
+        ground.setAttribute('material', 'color: #030308; metalness: 0.9; roughness: 0.1; opacity: 0.98');
+        scene.setAttribute('fog', 'type: exponential; color: #020208; density: 0.006');
+
+        // Restore starfield + energy orbs
+        document.querySelectorAll('#starfield-container a-sphere').forEach(s => s.setAttribute('visible', true));
+        document.querySelectorAll('#environment-group > a-sphere').forEach(s => s.setAttribute('visible', true));
+
+        // Restore aurora bands, vertical beams
+        document.querySelectorAll('#environment-group > a-plane:not(#ground-plane)').forEach(p => p.setAttribute('visible', true));
+        document.querySelectorAll('#environment-group > a-cylinder').forEach(c => c.setAttribute('visible', true));
+
+        // Restore pillar beacons
+        document.querySelectorAll('#environment-group > a-entity').forEach(ent => {
+          const cyl = ent.querySelector('a-cylinder');
+          const sph = ent.querySelector('a-sphere');
+          if (cyl && sph) {
+            cyl.setAttribute('material', 'opacity', '0.08');
+            sph.setAttribute('material', 'opacity', '0.5');
+          }
+        });
+
+        // Restore dark grid lines
+        document.querySelectorAll('#ground-grid a-box').forEach(b => {
+          const w = parseFloat(b.getAttribute('width'));
+          if (w > 0.02) {
+            b.setAttribute('material', 'color: #1a3399; opacity: 0.7; emissive: #1a3399; emissiveIntensity: 0.6');
+          } else if (w > 0.01) {
+            b.setAttribute('material', 'color: #0e1d55; opacity: 0.5; emissive: #0e1d55; emissiveIntensity: 0.4');
+          } else {
+            b.setAttribute('material', 'color: #081030; opacity: 0.2; emissive: #081030; emissiveIntensity: 0.2');
+          }
+        });
+
+        // Restore dark floor rings
+        document.querySelectorAll('#environment-group > a-torus').forEach(t => {
+          t.setAttribute('material', 'color', '#2255ff');
+          t.setAttribute('material', 'emissive', '#2255ff');
+          t.setAttribute('material', 'emissiveIntensity', '0.5');
+          t.setAttribute('material', 'opacity', '0.2');
+        });
+
+        // Restore wireframe shapes
+        document.querySelectorAll('a-icosahedron, a-octahedron, a-dodecahedron, a-tetrahedron').forEach(s => {
+          s.setAttribute('material', 'emissiveIntensity', '0.4');
+          s.setAttribute('material', 'opacity', '0.12');
+        });
+
+        // Restore glow disc
+        const glowDisc = document.querySelector('#environment-group > a-circle');
+        if (glowDisc) glowDisc.setAttribute('material', 'color: #1133aa; opacity: 0.12; emissive: #2244dd; emissiveIntensity: 0.5; side: double');
+
+        // Restore orbiting rings
+        document.querySelectorAll('#environment-group > a-entity > a-torus').forEach(t => {
+          t.setAttribute('material', 'emissiveIntensity', '0.3');
+          t.setAttribute('material', 'opacity', '0.08');
+        });
       } else {
         body.classList.add('light-mode');
-        themeToggle.innerHTML = '&#9728;';  // sun
-        sky.setAttribute('color', '#dde2ee');
-        cube.setAttribute('material', 'color: #8899bb; wireframe: true; opacity: 0.4');
-        ambient.setAttribute('intensity', '0.9');
+        themeToggle.innerHTML = '&#9728;';
+        sky.setAttribute('color', '#dce3f0');
+        cube.setAttribute('material', 'color: #4466aa; wireframe: true; opacity: 0.55');
+        ambient.setAttribute('intensity', '1.2');
+        ground.setAttribute('material', 'color: #b8c4dd; metalness: 0.15; roughness: 0.65; opacity: 0.98');
+        scene.setAttribute('fog', 'type: exponential; color: #dce3f0; density: 0.012');
+
+        // Hide starfield + energy orbs (look awful against bright sky)
+        document.querySelectorAll('#starfield-container a-sphere').forEach(s => s.setAttribute('visible', false));
+        document.querySelectorAll('#environment-group > a-sphere').forEach(s => s.setAttribute('visible', false));
+
+        // Hide aurora bands, vertical beams (dark-mode-only effects)
+        document.querySelectorAll('#environment-group > a-plane:not(#ground-plane)').forEach(p => p.setAttribute('visible', false));
+        document.querySelectorAll('#environment-group > a-cylinder').forEach(c => c.setAttribute('visible', false));
+
+        // Tone down pillar beacons
+        document.querySelectorAll('#environment-group > a-entity').forEach(ent => {
+          const cyl = ent.querySelector('a-cylinder');
+          const sph = ent.querySelector('a-sphere');
+          if (cyl && sph) {
+            cyl.setAttribute('material', 'color: #8899cc; opacity: 0.12; emissive: #8899cc; emissiveIntensity: 0.1');
+            sph.setAttribute('material', 'color: #6688cc; opacity: 0.3; emissive: #6688cc; emissiveIntensity: 0.2');
+          }
+        });
+
+        // Grid: softer lines for light background
+        document.querySelectorAll('#ground-grid a-box').forEach(b => {
+          const w = parseFloat(b.getAttribute('width'));
+          if (w > 0.02) {
+            b.setAttribute('material', 'color: #7788bb; opacity: 0.35; emissive: #7788bb; emissiveIntensity: 0.1');
+          } else if (w > 0.01) {
+            b.setAttribute('material', 'color: #8899cc; opacity: 0.25; emissive: #8899cc; emissiveIntensity: 0.05');
+          } else {
+            b.setAttribute('material', 'color: #99aadd; opacity: 0.15; emissive: #99aadd; emissiveIntensity: 0.02');
+          }
+        });
+
+        // Floor rings: very subtle
+        document.querySelectorAll('#environment-group > a-torus').forEach(t => {
+          t.setAttribute('material', 'color', '#7788cc');
+          t.setAttribute('material', 'emissive', '#7788cc');
+          t.setAttribute('material', 'emissiveIntensity', '0.08');
+          t.setAttribute('material', 'opacity', '0.12');
+        });
+
+        // Wireframe shapes: visible but muted
+        document.querySelectorAll('a-icosahedron, a-octahedron, a-dodecahedron, a-tetrahedron').forEach(s => {
+          s.setAttribute('material', 'color', '#6677bb');
+          s.setAttribute('material', 'emissive', '#6677bb');
+          s.setAttribute('material', 'emissiveIntensity', '0.1');
+          s.setAttribute('material', 'opacity', '0.12');
+        });
+
+        // Glow disc: barely visible
+        const glowDisc = document.querySelector('#environment-group > a-circle');
+        if (glowDisc) glowDisc.setAttribute('material', 'color: #8899cc; opacity: 0.08; emissive: #8899cc; emissiveIntensity: 0.05; side: double');
+
+        // Orbiting rings: very subtle
+        document.querySelectorAll('#environment-group > a-entity > a-torus').forEach(t => {
+          t.setAttribute('material', 'color', '#8899cc');
+          t.setAttribute('material', 'emissive', '#8899cc');
+          t.setAttribute('material', 'emissiveIntensity', '0.05');
+          t.setAttribute('material', 'opacity', '0.06');
+        });
       }
     }
+    applyTheme(); // apply on load
+    themeToggle.addEventListener('click', () => { isDark = !isDark; applyTheme(); });
 
-    themeToggle.addEventListener('click', () => {
-      isDark = !isDark;
-      applyTheme();
+    /* ══════════════ Model Selection ══════════════ */
+    let selectedModel = 'svm';
+    document.querySelectorAll('.model-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.model-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        selectedModel = btn.dataset.model;
+      });
     });
 
-    /* ── Upload Logic ── */
+    /* ══════════════ Upload ══════════════ */
     const fileInput = document.getElementById('file-input');
     const fileLabel = document.getElementById('file-label');
     const uploadBtn = document.getElementById('upload-btn');
@@ -326,7 +922,6 @@
     const infoPanel = document.getElementById('info-panel');
     const infoContent = document.getElementById('info-content');
     const controlsPanel = document.getElementById('controls-panel');
-
     let selectedFile = null;
 
     fileInput.addEventListener('change', (e) => {
@@ -340,43 +935,78 @@
 
     uploadBtn.addEventListener('click', async () => {
       if (!selectedFile) return;
-
       uploadBtn.disabled = true;
       statusEl.className = 'loading loading-pulse';
-      statusEl.textContent = 'Processing dataset...';
+      statusEl.textContent = `Training ${selectedModel.replace(/_/g, ' ')}...`;
 
       const formData = new FormData();
       formData.append('file', selectedFile);
+      formData.append('model', selectedModel);
 
       try {
         const res = await fetch('/upload', { method: 'POST', body: formData });
         const data = await res.json();
-
-        if (!res.ok) {
-          throw new Error(data.error || 'Upload failed');
-        }
+        if (!res.ok) throw new Error(data.error || 'Upload failed');
 
         statusEl.className = 'success';
         statusEl.textContent = `Trained on ${data.num_points} points. Loading...`;
 
-        // Show info panel
-        infoContent.innerHTML = `
-          <div>Points: <strong>${data.num_points}</strong></div>
-          <div>Classes: <strong>${data.classes.join(', ')}</strong></div>
-          <div>W: [${data.svm_weights.map(v => v.toFixed(3)).join(', ')}]</div>
-          <div>b: ${data.svm_bias.toFixed(3)}</div>
-        `;
+        const mi = data.model_info;
+        let infoHTML = '';
+        if (mi.model_type === 'svm') {
+          infoHTML = `
+            <span class="model-badge badge-svm">SVM (Linear)</span>
+            <div class="info-row">Points: <strong>${data.num_points}</strong></div>
+            <div class="info-row">Accuracy: <strong>${mi.accuracy}%</strong></div>
+            <div class="info-row">W: [${mi.weights.map(v => v.toFixed(3)).join(', ')}]</div>
+            <div class="info-row">b: ${mi.bias.toFixed(3)}</div>`;
+          document.getElementById('legend-boundary-text').textContent = 'SVM Decision Plane';
+        } else if (mi.model_type === 'linear_regression') {
+          infoHTML = `
+            <span class="model-badge badge-lr">Linear Regression</span>
+            <div class="info-row">Points: <strong>${data.num_points}</strong></div>
+            <div class="info-row">R\u00b2: <strong>${mi.r_squared}</strong></div>
+            <div class="info-row">W: [${mi.weights.map(v => v.toFixed(3)).join(', ')}]</div>
+            <div class="info-row">b: ${mi.bias.toFixed(3)}</div>`;
+          document.getElementById('legend-boundary-text').textContent = 'Regression Surface';
+        } else if (mi.model_type === 'neural_network') {
+          infoHTML = `
+            <span class="model-badge badge-nn">Neural Network</span>
+            <div class="info-row">Points: <strong>${data.num_points}</strong></div>
+            <div class="info-row">Accuracy: <strong>${mi.accuracy}%</strong></div>
+            <div class="info-row">Layers: <strong>${mi.layers.join(' \u2192 ')}</strong></div>
+            <div class="info-row">Iterations: <strong>${mi.iterations}</strong></div>`;
+          document.getElementById('legend-boundary-text').textContent = 'NN Decision Boundary';
+        }
+        infoHTML += `<div class="info-row" style="margin-top:4px;">Boundary pts: <strong>${data.num_boundary_points}</strong></div>`;
+        infoContent.innerHTML = infoHTML;
         infoPanel.style.display = 'block';
         infoPanel.classList.add('fade-in');
 
-        // Load visualization
-        await loadVisualization();
+        await loadVisualization(mi.model_type);
 
-        statusEl.textContent = 'Visualization ready!';
+        const nnContainer = document.getElementById('nn-container');
+        const nnToggleBtn = document.getElementById('toggle-nn');
+        if (mi.model_type === 'neural_network') {
+          await renderNeuralNetwork();
+          nnContainer.setAttribute('visible', true);
+          nnToggleBtn.style.display = '';
+          nnToggleBtn.classList.add('active');
+        } else {
+          nnContainer.setAttribute('visible', false);
+          nnToggleBtn.style.display = 'none';
+          nnToggleBtn.classList.remove('active');
+          document.getElementById('nn-neurons').innerHTML = '';
+          document.getElementById('nn-connections').innerHTML = '';
+          document.getElementById('nn-labels').innerHTML = '';
+        }
+
+        statusEl.textContent = 'Visualization ready! Hover points to inspect.';
         legend.style.display = 'block';
         legend.classList.add('fade-in');
         controlsPanel.style.display = 'block';
         controlsPanel.classList.add('fade-in');
+        uploadBtn.disabled = false;
 
       } catch (err) {
         statusEl.className = 'error';
@@ -385,38 +1015,72 @@
       }
     });
 
-    /* ── Visualization ── */
+    /* ══════════════ Data Visualization ══════════════ */
     const COLORS = { 0: '#ff4466', 1: '#4499ff', 2: '#44ff88', 3: '#ffaa44' };
+    const COLOR_NAMES = { 0: 'Red (0)', 1: 'Blue (1)', 2: 'Green (2)', 3: 'Orange (3)' };
+    const BOUNDARY_COLORS = { svm: '#b48cff', linear_regression: '#44dd88', neural_network: '#ff88cc' };
 
-    async function loadVisualization() {
+    async function loadVisualization(modelType) {
       const pointsContainer = document.getElementById('data-points');
       const planeContainer = document.getElementById('decision-boundary');
       pointsContainer.innerHTML = '';
       planeContainer.innerHTML = '';
+
+      // Reset pinned tooltip
+      tooltipPinned = false;
+      tooltipTarget = null;
+      tooltip.classList.remove('pinned');
+      tooltip.style.display = 'none';
 
       const ts = Date.now();
       const [pointsRes, planeRes] = await Promise.all([
         fetch(`/static/points.json?t=${ts}`),
         fetch(`/static/plane.json?t=${ts}`)
       ]);
-
       const pointsData = await pointsRes.json();
       const planeData = await planeRes.json();
 
-      // Render data points as spheres
+      // Render interactive data points
       const radius = parseFloat(document.getElementById('point-size').value);
-      pointsData.points.forEach((pt) => {
+      pointsData.points.forEach((pt, idx) => {
         const sphere = document.createElement('a-sphere');
         sphere.setAttribute('position', `${pt.x} ${pt.y} ${pt.z}`);
         sphere.setAttribute('radius', String(radius));
         sphere.setAttribute('color', COLORS[pt.label] || '#ffffff');
-        sphere.setAttribute('material', 'opacity: 0.92; metalness: 0.2; roughness: 0.5');
-        sphere.setAttribute('class', 'data-point');
+        sphere.setAttribute('material',
+          `opacity: 0.92; metalness: 0.2; roughness: 0.5; emissive: ${COLORS[pt.label] || '#ffffff'}; emissiveIntensity: 0.05`);
+        sphere.setAttribute('class', 'interactive data-point');
+        sphere.setAttribute('hover-highlight', 'scaleFactor: 1.5');
+
+        // Store data for tooltip
+        sphere.dataset.px = pt.x.toFixed(3);
+        sphere.dataset.py = pt.y.toFixed(3);
+        sphere.dataset.pz = pt.z.toFixed(3);
+        sphere.dataset.label = pt.label;
+        sphere.dataset.idx = idx;
+
+        // Hover events
+        sphere.addEventListener('mouseenter', function(e) {
+          const d = this.dataset;
+          showTooltip(this, `
+            <div class="tt-title">Data Point #${d.idx}</div>
+            <div class="tt-row">X: <strong>${d.px}</strong></div>
+            <div class="tt-row">Y: <strong>${d.py}</strong></div>
+            <div class="tt-row">Z: <strong>${d.pz}</strong></div>
+            <div class="tt-divider"></div>
+            <div class="tt-row">Class: <strong style="color:${COLORS[d.label]}">${COLOR_NAMES[d.label] || d.label}</strong></div>
+            <div class="tt-pin-hint">Click to pin</div>
+          `, e.detail && e.detail.cursorEl ? null : e);
+        });
+        sphere.addEventListener('mouseleave', function() { hideTooltip(this); });
+        sphere.addEventListener('click', function() { pinTooltip(this); });
+
         pointsContainer.appendChild(sphere);
       });
 
       // Render decision boundary
       const opacity = parseFloat(document.getElementById('plane-opacity').value);
+      const boundaryColor = BOUNDARY_COLORS[modelType] || '#b48cff';
       const step = 5.0 / 30;
       planeData.plane.forEach((pt) => {
         const box = document.createElement('a-box');
@@ -425,50 +1089,651 @@
         box.setAttribute('height', String(step));
         box.setAttribute('depth', String(step));
         box.setAttribute('material',
-          `color: #b48cff; opacity: ${opacity}; transparent: true; side: double; metalness: 0.05; roughness: 0.9`);
+          `color: ${boundaryColor}; opacity: ${opacity}; transparent: true; side: double; metalness: 0.05; roughness: 0.9`);
         box.setAttribute('class', 'plane-cell');
         planeContainer.appendChild(box);
       });
     }
 
-    /* ── Controls ── */
+    /* ══════════════ Neural Network 3D ══════════════ */
+    const LAYER_COLORS = ['#ff4466', '#ffaa44', '#44dd66', '#4499ff', '#b48cff', '#ff88cc'];
+    const NN_LAYER_LABELS = ['Input', 'Hidden 1', 'Hidden 2', 'Output'];
 
-    // Point size slider
+    async function renderNeuralNetwork() {
+      const neuronsEl = document.getElementById('nn-neurons');
+      const connectionsEl = document.getElementById('nn-connections');
+      const labelsEl = document.getElementById('nn-labels');
+      neuronsEl.innerHTML = '';
+      connectionsEl.innerHTML = '';
+      labelsEl.innerHTML = '';
+
+      const ts = Date.now();
+      const res = await fetch(`/static/network.json?t=${ts}`);
+      const net = await res.json();
+
+      const layers = net.layers;
+      const weights = net.weights;
+      const biases = net.biases;
+      const activations = net.activations;
+      const numLayers = layers.length;
+
+      const totalWidth = 8;
+      const maxHeight = 4;
+      const layerSpacing = totalWidth / (numLayers - 1);
+      const startX = -totalWidth / 2;
+      const MAX_DISPLAY = 12;
+      const positions = [];
+
+      for (let l = 0; l < numLayers; l++) {
+        const n = layers[l];
+        const displayN = Math.min(n, MAX_DISPLAY);
+        const skipped = n - displayN;
+        const spacing = displayN > 1 ? maxHeight / (displayN - 1) : 0;
+        const startY = displayN > 1 ? -maxHeight / 2 : 0;
+        const x = startX + l * layerSpacing;
+        const layerPos = [];
+
+        for (let j = 0; j < displayN; j++) {
+          const y = startY + j * spacing;
+          layerPos.push({ x, y, z: 0 });
+
+          let intensity = 0.5;
+          let actVal = 0;
+          if (activations && activations[l] && activations[l][j] !== undefined) {
+            actVal = activations[l][j];
+            intensity = Math.min(1.0, Math.abs(actVal) / (Math.max(...activations[l].map(Math.abs)) + 1e-8));
+          }
+
+          let biasVal = 0;
+          if (biases && l > 0 && biases[l - 1] && biases[l - 1][j] !== undefined) {
+            biasVal = biases[l - 1][j];
+          }
+
+          const color = LAYER_COLORS[l % LAYER_COLORS.length];
+          const radius = l === 0 || l === numLayers - 1 ? 0.15 : 0.11;
+          const sphere = document.createElement('a-sphere');
+          sphere.setAttribute('position', `${x} ${y} 0`);
+          sphere.setAttribute('radius', String(radius));
+          sphere.setAttribute('material',
+            `color: ${color}; opacity: ${0.5 + intensity * 0.5}; emissive: ${color}; emissiveIntensity: ${0.2 + intensity * 0.4}; metalness: 0.3; roughness: 0.4`);
+          sphere.setAttribute('class', 'interactive nn-neuron');
+          sphere.setAttribute('hover-highlight', 'scaleFactor: 1.6');
+
+          // Store metadata
+          const layerName = l < NN_LAYER_LABELS.length ? NN_LAYER_LABELS[l] : `Layer ${l}`;
+          sphere.dataset.layer = l;
+          sphere.dataset.layerName = layerName;
+          sphere.dataset.neuronIdx = j;
+          sphere.dataset.activation = actVal.toFixed(4);
+          sphere.dataset.bias = biasVal.toFixed(4);
+          sphere.dataset.layerSize = n;
+
+          // Neuron hover events
+          sphere.addEventListener('mouseenter', function(e) {
+            const d = this.dataset;
+            let html = `
+              <div class="tt-title">${d.layerName} - Neuron ${d.neuronIdx}</div>
+              <div class="tt-row">Layer: <strong>${d.layer} / ${numLayers - 1}</strong> (size ${d.layerSize})</div>
+              <div class="tt-row">Activation: <strong>${d.activation}</strong></div>`;
+            if (parseInt(d.layer) > 0) {
+              html += `<div class="tt-row">Bias: <strong>${d.bias}</strong></div>`;
+            }
+            html += `<div class="tt-pin-hint">Click to pin</div>`;
+            showTooltip(this, html, e.detail && e.detail.cursorEl ? null : e);
+
+            // Highlight connected edges
+            highlightNeuronConnections(parseInt(d.layer), parseInt(d.neuronIdx), true);
+          });
+          sphere.addEventListener('mouseleave', function() {
+            hideTooltip(this);
+            highlightNeuronConnections(parseInt(this.dataset.layer), parseInt(this.dataset.neuronIdx), false);
+          });
+          sphere.addEventListener('click', function() { pinTooltip(this); });
+
+          neuronsEl.appendChild(sphere);
+        }
+
+        if (skipped > 0) {
+          const dots = document.createElement('a-text');
+          dots.setAttribute('value', `+${skipped} more`);
+          dots.setAttribute('position', `${x} ${startY - 0.5} 0`);
+          dots.setAttribute('color', '#8888aa');
+          dots.setAttribute('scale', '0.35 0.35 0.35');
+          dots.setAttribute('align', 'center');
+          labelsEl.appendChild(dots);
+        }
+
+        const labelName = l < NN_LAYER_LABELS.length ? NN_LAYER_LABELS[l] : `Layer ${l}`;
+        const label = document.createElement('a-text');
+        label.setAttribute('value', `${labelName}\n(${n})`);
+        label.setAttribute('position', `${x} ${maxHeight / 2 + 0.6} 0`);
+        label.setAttribute('color', LAYER_COLORS[l % LAYER_COLORS.length]);
+        label.setAttribute('scale', '0.45 0.45 0.45');
+        label.setAttribute('align', 'center');
+        labelsEl.appendChild(label);
+
+        positions.push(layerPos);
+      }
+
+      // Draw connections
+      for (let l = 0; l < numLayers - 1; l++) {
+        const fromPos = positions[l];
+        const toPos = positions[l + 1];
+        const W = weights[l];
+        const maxW = Math.max(...W.flat().map(Math.abs), 1e-8);
+
+        for (let i = 0; i < fromPos.length; i++) {
+          for (let j = 0; j < toPos.length; j++) {
+            let wVal = 0;
+            if (W[i] && W[i][j] !== undefined) wVal = W[i][j];
+            const absW = Math.abs(wVal);
+            const normalizedW = absW / maxW;
+            if (normalizedW < 0.08) continue;
+
+            const from = fromPos[i];
+            const to = toPos[j];
+            const mx = (from.x + to.x) / 2;
+            const my = (from.y + to.y) / 2;
+            const mz = (from.z + to.z) / 2;
+            const dx = to.x - from.x;
+            const dy = to.y - from.y;
+            const dz = to.z - from.z;
+            const length = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            const rotZ = -Math.atan2(dx, dy) * (180 / Math.PI);
+            const rotX = Math.atan2(dz, Math.sqrt(dx * dx + dy * dy)) * (180 / Math.PI);
+
+            const color = wVal >= 0 ? '#4499ff' : '#ff4466';
+            const opacity = 0.08 + normalizedW * 0.35;
+            const radius = 0.005 + normalizedW * 0.02;
+
+            const cyl = document.createElement('a-cylinder');
+            cyl.setAttribute('position', `${mx} ${my} ${mz}`);
+            cyl.setAttribute('height', String(length));
+            cyl.setAttribute('radius', String(radius));
+            cyl.setAttribute('rotation', `${rotX} 0 ${rotZ}`);
+            cyl.setAttribute('material',
+              `color: ${color}; opacity: ${opacity}; transparent: true; emissive: ${color}; emissiveIntensity: 0.15`);
+            cyl.setAttribute('class', 'interactive nn-connection');
+            cyl.setAttribute('hover-highlight', 'scaleFactor: 2.5; type: cylinder');
+
+            // Connection metadata
+            cyl.dataset.fromLayer = l;
+            cyl.dataset.fromIdx = i;
+            cyl.dataset.toLayer = l + 1;
+            cyl.dataset.toIdx = j;
+            cyl.dataset.weight = wVal.toFixed(5);
+
+            cyl.addEventListener('mouseenter', function(e) {
+              const d = this.dataset;
+              const fromName = parseInt(d.fromLayer) < NN_LAYER_LABELS.length ? NN_LAYER_LABELS[d.fromLayer] : `Layer ${d.fromLayer}`;
+              const toName = parseInt(d.toLayer) < NN_LAYER_LABELS.length ? NN_LAYER_LABELS[d.toLayer] : `Layer ${d.toLayer}`;
+              const w = parseFloat(d.weight);
+              const sign = w >= 0 ? '+' : '';
+              showTooltip(this, `
+                <div class="tt-title">Connection</div>
+                <div class="tt-row">${fromName}[${d.fromIdx}] \u2192 ${toName}[${d.toIdx}]</div>
+                <div class="tt-divider"></div>
+                <div class="tt-row">Weight: <strong style="color:${w >= 0 ? '#4499ff' : '#ff4466'}">${sign}${d.weight}</strong></div>
+                <div class="tt-row">|W|: <strong>${Math.abs(w).toFixed(5)}</strong></div>
+              `, e.detail && e.detail.cursorEl ? null : e);
+            });
+            cyl.addEventListener('mouseleave', function() { hideTooltip(this); });
+            cyl.addEventListener('click', function() { pinTooltip(this); });
+
+            connectionsEl.appendChild(cyl);
+          }
+        }
+      }
+    }
+
+    // Highlight all connections from/to a specific neuron
+    function highlightNeuronConnections(layer, idx, highlight) {
+      document.querySelectorAll('.nn-connection').forEach(conn => {
+        const fl = parseInt(conn.dataset.fromLayer);
+        const fi = parseInt(conn.dataset.fromIdx);
+        const tl = parseInt(conn.dataset.toLayer);
+        const ti = parseInt(conn.dataset.toIdx);
+
+        if ((fl === layer && fi === idx) || (tl === layer && ti === idx)) {
+          if (highlight) {
+            conn.setAttribute('material', 'opacity', 0.7);
+            conn.object3D.scale.set(2, 1, 2);
+          } else {
+            // Restore original opacity from weight magnitude
+            const w = Math.abs(parseFloat(conn.dataset.weight));
+            const origOp = 0.08 + Math.min(w / 2, 1) * 0.35;
+            conn.setAttribute('material', 'opacity', Math.min(origOp, 0.43));
+            conn.object3D.scale.set(1, 1, 1);
+          }
+        }
+      });
+    }
+
+    /* ══════════════ Controls ══════════════ */
     const pointSizeSlider = document.getElementById('point-size');
     const pointSizeVal = document.getElementById('point-size-val');
     pointSizeSlider.addEventListener('input', () => {
       const val = pointSizeSlider.value;
       pointSizeVal.textContent = parseFloat(val).toFixed(2);
-      document.querySelectorAll('.data-point').forEach(el => {
-        el.setAttribute('radius', val);
-      });
+      document.querySelectorAll('.data-point').forEach(el => el.setAttribute('radius', val));
     });
 
-    // Plane opacity slider
     const planeOpSlider = document.getElementById('plane-opacity');
     const planeOpVal = document.getElementById('plane-opacity-val');
     planeOpSlider.addEventListener('input', () => {
       const val = planeOpSlider.value;
       planeOpVal.textContent = parseFloat(val).toFixed(2);
-      document.querySelectorAll('.plane-cell').forEach(el => {
-        el.setAttribute('material', 'opacity', val);
-      });
+      document.querySelectorAll('.plane-cell').forEach(el => el.setAttribute('material', 'opacity', val));
     });
 
-    // Toggle buttons
     function setupToggle(btnId, targetId) {
       const btn = document.getElementById(btnId);
       const target = document.getElementById(targetId);
       btn.addEventListener('click', () => {
         btn.classList.toggle('active');
-        const visible = btn.classList.contains('active');
-        target.setAttribute('visible', visible);
+        target.setAttribute('visible', btn.classList.contains('active'));
       });
     }
-
     setupToggle('toggle-points', 'data-points');
     setupToggle('toggle-plane', 'decision-boundary');
     setupToggle('toggle-axes', 'axes-group');
+    setupToggle('toggle-env', 'environment-group');
+    setupToggle('toggle-nn', 'nn-container');
+
+    /* ══════════════ Procedural Star Field (tiny bright dots) ══════════════ */
+    (function generateStarField() {
+      const container = document.getElementById('starfield-container');
+      if (!container) return;
+      const starCount = 300;
+      const colors = ['#ffffff', '#ccddff', '#aabbff', '#ddeeff', '#bbccff', '#ffeedd', '#aaccff'];
+      for (let i = 0; i < starCount; i++) {
+        const star = document.createElement('a-sphere');
+        const dist = 60 + Math.random() * 100;       // 60–160 units away
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.random() * Math.PI * 0.65;  // upper hemisphere
+        const x = dist * Math.sin(phi) * Math.cos(theta);
+        const y = 2 + dist * Math.cos(phi);
+        const z = dist * Math.sin(phi) * Math.sin(theta) * (Math.random() > 0.5 ? -1 : 1);
+        const r = 0.02 + Math.random() * 0.08;       // tiny radius
+        const col = colors[Math.floor(Math.random() * colors.length)];
+        const emI = (0.6 + Math.random() * 0.4).toFixed(2);
+        star.setAttribute('position', `${x.toFixed(1)} ${y.toFixed(1)} ${z.toFixed(1)}`);
+        star.setAttribute('radius', r.toFixed(3));
+        star.setAttribute('material', `color: ${col}; emissive: ${col}; emissiveIntensity: ${emI}; opacity: 1`);
+        // ~25% twinkle
+        if (Math.random() < 0.25) {
+          const dur = 1500 + Math.random() * 3000;
+          star.setAttribute('animation', `property: material.emissiveIntensity; from: 0.3; to: ${emI}; dur: ${Math.round(dur)}; dir: alternate; loop: true`);
+        }
+        container.appendChild(star);
+      }
+    })();
+
+    // Auto-rotate toggle
+    const rotateBtn = document.getElementById('toggle-rotate');
+    rotateBtn.addEventListener('click', () => {
+      rotateBtn.classList.toggle('active');
+      const enabled = rotateBtn.classList.contains('active');
+      document.getElementById('coord-system').setAttribute('auto-rotate', 'enabled', enabled);
+    });
+
+    // Drag-rotate toggle
+    const dragBtn = document.getElementById('toggle-drag');
+    const mainCam = document.getElementById('main-camera');
+    dragBtn.addEventListener('click', () => {
+      dragBtn.classList.toggle('active');
+      const enabled = dragBtn.classList.contains('active');
+      document.getElementById('coord-system').setAttribute('drag-rotate', 'enabled', enabled);
+      // Disable look-controls when dragging to avoid conflict
+      if (enabled) {
+        mainCam.setAttribute('look-controls', 'enabled', false);
+      } else {
+        mainCam.setAttribute('look-controls', 'enabled', true);
+      }
+    });
+
+    /* ══════════════ Training Animation ══════════════ */
+    const trainLiveBtn = document.getElementById('train-live-btn');
+    const trainPanel = document.getElementById('train-panel');
+    const trainEpochEl = document.getElementById('train-epoch');
+    const trainAccEl = document.getElementById('train-acc');
+    const trainLossEl = document.getElementById('train-loss');
+    const trainProgressFill = document.getElementById('train-progress-fill');
+    const trainPlayBtn = document.getElementById('train-play');
+    const trainPrevBtn = document.getElementById('train-prev');
+    const trainNextBtn = document.getElementById('train-next');
+    const trainCloseBtn = document.getElementById('train-close');
+    const trainSpeedSlider = document.getElementById('train-speed');
+    const trainSpeedVal = document.getElementById('train-speed-val');
+
+    let trainSnapshots = [];
+    let trainPoints = [];
+    let trainIdx = 0;
+    let trainPlaying = false;
+    let trainTimer = null;
+
+    // Enable train button when file is selected
+    fileInput.addEventListener('change', () => {
+      if (selectedFile) trainLiveBtn.disabled = false;
+    });
+
+    trainLiveBtn.addEventListener('click', async () => {
+      if (!selectedFile) return;
+      trainLiveBtn.disabled = true;
+      statusEl.className = 'loading loading-pulse';
+      statusEl.textContent = 'Preparing training animation...';
+
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+      formData.append('epochs', '50');
+
+      try {
+        const res = await fetch('/train-animate', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Training failed');
+
+        trainSnapshots = data.snapshots;
+        trainPoints = data.points;
+        trainIdx = 0;
+
+        statusEl.className = 'success';
+        statusEl.textContent = `${trainSnapshots.length} snapshots ready. Playing...`;
+
+        // Show train panel, NN container, controls
+        trainPanel.style.display = 'block';
+        trainPanel.classList.add('fade-in');
+        legend.classList.add('shifted-up');
+
+        const nnContainer = document.getElementById('nn-container');
+        nnContainer.setAttribute('visible', true);
+        const nnToggleBtn = document.getElementById('toggle-nn');
+        nnToggleBtn.style.display = '';
+        nnToggleBtn.classList.add('active');
+
+        // Ensure controls are visible
+        controlsPanel.style.display = 'block';
+        legend.style.display = 'block';
+
+        // Render initial points
+        renderTrainPoints();
+
+        // Render first snapshot
+        renderTrainSnapshot(0);
+
+        // Auto-play
+        trainPlaying = true;
+        trainPlayBtn.textContent = 'Pause';
+        playTraining();
+
+        trainLiveBtn.disabled = false;
+
+      } catch (err) {
+        statusEl.className = 'error';
+        statusEl.textContent = err.message;
+        trainLiveBtn.disabled = false;
+      }
+    });
+
+    function renderTrainPoints() {
+      const pointsContainer = document.getElementById('data-points');
+      pointsContainer.innerHTML = '';
+      const radius = parseFloat(document.getElementById('point-size').value);
+
+      trainPoints.forEach((pt, idx) => {
+        const sphere = document.createElement('a-sphere');
+        sphere.setAttribute('position', `${pt.x} ${pt.y} ${pt.z}`);
+        sphere.setAttribute('radius', String(radius));
+        sphere.setAttribute('color', COLORS[pt.label] || '#ffffff');
+        sphere.setAttribute('material',
+          `opacity: 0.92; metalness: 0.2; roughness: 0.5; emissive: ${COLORS[pt.label] || '#ffffff'}; emissiveIntensity: 0.05`);
+        sphere.setAttribute('class', 'interactive data-point');
+        sphere.setAttribute('hover-highlight', 'scaleFactor: 1.5');
+        sphere.dataset.px = pt.x.toFixed(3);
+        sphere.dataset.py = pt.y.toFixed(3);
+        sphere.dataset.pz = pt.z.toFixed(3);
+        sphere.dataset.label = pt.label;
+        sphere.dataset.idx = idx;
+        sphere.addEventListener('mouseenter', function(e) {
+          const d = this.dataset;
+          showTooltip(this, `
+            <div class="tt-title">Data Point #${d.idx}</div>
+            <div class="tt-row">X: <strong>${d.px}</strong></div>
+            <div class="tt-row">Y: <strong>${d.py}</strong></div>
+            <div class="tt-row">Z: <strong>${d.pz}</strong></div>
+            <div class="tt-divider"></div>
+            <div class="tt-row">Class: <strong style="color:${COLORS[d.label]}">${COLOR_NAMES[d.label] || d.label}</strong></div>
+          `, e.detail && e.detail.cursorEl ? null : e);
+        });
+        sphere.addEventListener('mouseleave', function() { hideTooltip(this); });
+        pointsContainer.appendChild(sphere);
+      });
+    }
+
+    function renderTrainSnapshot(idx) {
+      const snap = trainSnapshots[idx];
+      if (!snap) return;
+
+      // Update stats
+      trainEpochEl.textContent = snap.epoch;
+      trainAccEl.textContent = snap.accuracy + '%';
+      trainLossEl.textContent = snap.loss.toFixed(4);
+      trainProgressFill.style.width = ((idx + 1) / trainSnapshots.length * 100) + '%';
+
+      // Update boundary
+      const planeContainer = document.getElementById('decision-boundary');
+      planeContainer.innerHTML = '';
+      const opacity = parseFloat(document.getElementById('plane-opacity').value);
+      const step = 5.0 / 15; // lower res for animation
+
+      snap.boundary.forEach(pt => {
+        const box = document.createElement('a-box');
+        box.setAttribute('position', `${pt.x} ${pt.y} ${pt.z}`);
+        box.setAttribute('width', String(step));
+        box.setAttribute('height', String(step));
+        box.setAttribute('depth', String(step));
+        box.setAttribute('material',
+          `color: #ff88cc; opacity: ${opacity}; transparent: true; side: double; metalness: 0.05; roughness: 0.9`);
+        box.setAttribute('class', 'plane-cell');
+        planeContainer.appendChild(box);
+      });
+
+      // Update NN neurons and connections
+      renderTrainNetwork(snap);
+
+      // Update button states
+      trainPrevBtn.disabled = idx === 0;
+      trainNextBtn.disabled = idx === trainSnapshots.length - 1;
+    }
+
+    function renderTrainNetwork(snap) {
+      const neuronsEl = document.getElementById('nn-neurons');
+      const connectionsEl = document.getElementById('nn-connections');
+      const labelsEl = document.getElementById('nn-labels');
+      neuronsEl.innerHTML = '';
+      connectionsEl.innerHTML = '';
+      labelsEl.innerHTML = '';
+
+      const layers = snap.layers;
+      const weights = snap.weights;
+      const activations = snap.activations;
+      const numLayers = layers.length;
+
+      const totalWidth = 8;
+      const maxHeight = 4;
+      const layerSpacing = totalWidth / (numLayers - 1);
+      const startX = -totalWidth / 2;
+      const MAX_DISPLAY = 12;
+      const positions = [];
+
+      for (let l = 0; l < numLayers; l++) {
+        const n = layers[l];
+        const displayN = Math.min(n, MAX_DISPLAY);
+        const spacing = displayN > 1 ? maxHeight / (displayN - 1) : 0;
+        const startY = displayN > 1 ? -maxHeight / 2 : 0;
+        const x = startX + l * layerSpacing;
+        const layerPos = [];
+
+        for (let j = 0; j < displayN; j++) {
+          const y = startY + j * spacing;
+          layerPos.push({ x, y, z: 0 });
+
+          let intensity = 0.5;
+          if (activations && activations[l] && activations[l][j] !== undefined) {
+            const maxAct = Math.max(...activations[l].map(Math.abs), 1e-8);
+            intensity = Math.min(1.0, Math.abs(activations[l][j]) / maxAct);
+          }
+
+          const color = LAYER_COLORS[l % LAYER_COLORS.length];
+          const radius = l === 0 || l === numLayers - 1 ? 0.15 : 0.11;
+          const sphere = document.createElement('a-sphere');
+          sphere.setAttribute('position', `${x} ${y} 0`);
+          sphere.setAttribute('radius', String(radius));
+          sphere.setAttribute('material',
+            `color: ${color}; opacity: ${0.5 + intensity * 0.5}; emissive: ${color}; emissiveIntensity: ${0.2 + intensity * 0.5}; metalness: 0.3; roughness: 0.4`);
+          neuronsEl.appendChild(sphere);
+        }
+
+        const labelName = l < NN_LAYER_LABELS.length ? NN_LAYER_LABELS[l] : `Layer ${l}`;
+        const label = document.createElement('a-text');
+        label.setAttribute('value', `${labelName}\n(${n})`);
+        label.setAttribute('position', `${x} ${maxHeight / 2 + 0.6} 0`);
+        label.setAttribute('color', LAYER_COLORS[l % LAYER_COLORS.length]);
+        label.setAttribute('scale', '0.45 0.45 0.45');
+        label.setAttribute('align', 'center');
+        labelsEl.appendChild(label);
+
+        positions.push(layerPos);
+      }
+
+      // Connections (lighter version for animation perf)
+      for (let l = 0; l < numLayers - 1; l++) {
+        const fromPos = positions[l];
+        const toPos = positions[l + 1];
+        const W = weights[l];
+        const maxW = Math.max(...W.flat().map(Math.abs), 1e-8);
+
+        for (let i = 0; i < fromPos.length; i++) {
+          for (let j = 0; j < toPos.length; j++) {
+            let wVal = (W[i] && W[i][j] !== undefined) ? W[i][j] : 0;
+            const normalizedW = Math.abs(wVal) / maxW;
+            if (normalizedW < 0.15) continue; // higher threshold for animation perf
+
+            const from = fromPos[i], to = toPos[j];
+            const mx = (from.x + to.x) / 2, my = (from.y + to.y) / 2;
+            const dx = to.x - from.x, dy = to.y - from.y;
+            const length = Math.sqrt(dx * dx + dy * dy);
+            const rotZ = -Math.atan2(dx, dy) * (180 / Math.PI);
+            const color = wVal >= 0 ? '#4499ff' : '#ff4466';
+
+            const cyl = document.createElement('a-cylinder');
+            cyl.setAttribute('position', `${mx} ${my} 0`);
+            cyl.setAttribute('height', String(length));
+            cyl.setAttribute('radius', String(0.005 + normalizedW * 0.018));
+            cyl.setAttribute('rotation', `0 0 ${rotZ}`);
+            cyl.setAttribute('material',
+              `color: ${color}; opacity: ${0.1 + normalizedW * 0.3}; transparent: true; emissive: ${color}; emissiveIntensity: 0.15`);
+            connectionsEl.appendChild(cyl);
+          }
+        }
+      }
+    }
+
+    function playTraining() {
+      if (trainTimer) clearTimeout(trainTimer);
+      if (!trainPlaying) return;
+
+      if (trainIdx < trainSnapshots.length) {
+        renderTrainSnapshot(trainIdx);
+        trainIdx++;
+        const speed = parseInt(trainSpeedSlider.value);
+        trainTimer = setTimeout(playTraining, speed);
+      } else {
+        trainPlaying = false;
+        trainPlayBtn.textContent = 'Replay';
+      }
+    }
+
+    trainPlayBtn.addEventListener('click', () => {
+      if (trainPlaying) {
+        // Pause
+        trainPlaying = false;
+        if (trainTimer) clearTimeout(trainTimer);
+        trainPlayBtn.textContent = 'Play';
+      } else {
+        // Play / Replay
+        if (trainIdx >= trainSnapshots.length) trainIdx = 0;
+        trainPlaying = true;
+        trainPlayBtn.textContent = 'Pause';
+        playTraining();
+      }
+    });
+
+    trainPrevBtn.addEventListener('click', () => {
+      if (trainIdx > 0) {
+        trainPlaying = false;
+        if (trainTimer) clearTimeout(trainTimer);
+        trainPlayBtn.textContent = 'Play';
+        trainIdx--;
+        renderTrainSnapshot(trainIdx);
+      }
+    });
+
+    trainNextBtn.addEventListener('click', () => {
+      if (trainIdx < trainSnapshots.length - 1) {
+        trainPlaying = false;
+        if (trainTimer) clearTimeout(trainTimer);
+        trainPlayBtn.textContent = 'Play';
+        trainIdx++;
+        renderTrainSnapshot(trainIdx);
+      }
+    });
+
+    trainCloseBtn.addEventListener('click', () => {
+      trainPlaying = false;
+      if (trainTimer) clearTimeout(trainTimer);
+      trainPanel.style.display = 'none';
+      legend.classList.remove('shifted-up');
+    });
+
+    trainSpeedSlider.addEventListener('input', () => {
+      trainSpeedVal.textContent = trainSpeedSlider.value;
+    });
+
+    /* ══════════════ Keyboard Shortcuts ══════════════ */
+    document.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'INPUT') return;
+      switch (e.key.toLowerCase()) {
+        case 'r':
+          rotateBtn.click();
+          break;
+        case 'g':
+          dragBtn.click();
+          break;
+        case 't':
+          themeToggle.click();
+          break;
+        case ' ':
+          e.preventDefault();
+          if (trainPanel.style.display === 'block') trainPlayBtn.click();
+          break;
+        case 'arrowleft':
+          if (trainPanel.style.display === 'block') trainPrevBtn.click();
+          break;
+        case 'arrowright':
+          if (trainPanel.style.display === 'block') trainNextBtn.click();
+          break;
+        case 'escape':
+          if (trainPanel.style.display === 'block') {
+            trainCloseBtn.click();
+          } else if (tooltipPinned) {
+            tooltipPinned = false;
+            tooltipTarget = null;
+            tooltip.classList.remove('pinned');
+            tooltip.style.display = 'none';
+          }
+          break;
+      }
+    });
   </script>
 
 </body>
