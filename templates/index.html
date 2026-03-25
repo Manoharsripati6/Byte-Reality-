@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>3D ML VR Visualization</title>
   <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
 
   <!-- ── Register A-Frame components BEFORE the scene ── -->
   <script>
@@ -122,6 +123,164 @@
         });
       }
     });
+    /* ══════════ Boids Flocking Simulation ══════════ */
+    AFRAME.registerComponent('boids-simulation', {
+      schema: {
+        count: { default: 120 },
+        speed: { default: 2 },
+        enabled: { default: false },
+        separation: { default: 1.5 },
+        alignment: { default: 1.0 },
+        cohesion: { default: 1.0 },
+        bounds: { default: 4 }
+      },
+      init() {
+        this.boids = [];
+        this.meshes = [];
+        this.group = new THREE.Group();
+        this.el.object3D.add(this.group);
+        this._buildBoids();
+      },
+      update(oldData) {
+        if (oldData.count !== undefined && oldData.count !== this.data.count) {
+          this._clearBoids();
+          this._buildBoids();
+        }
+      },
+      _buildBoids() {
+        const n = this.data.count;
+        const bounds = this.data.bounds;
+        const colors = [
+          new THREE.Color('#44ddff'), new THREE.Color('#ff44cc'),
+          new THREE.Color('#44ff88'), new THREE.Color('#ffaa44'),
+          new THREE.Color('#aa66ff'), new THREE.Color('#ff6644')
+        ];
+        const geom = new THREE.ConeGeometry(0.04, 0.12, 4);
+        geom.rotateX(Math.PI / 2);
+
+        for (let i = 0; i < n; i++) {
+          const col = colors[i % colors.length];
+          const mat = new THREE.MeshStandardMaterial({
+            color: col, emissive: col, emissiveIntensity: 0.6,
+            transparent: true, opacity: 0.85
+          });
+          const mesh = new THREE.Mesh(geom, mat);
+          const pos = new THREE.Vector3(
+            (Math.random() - 0.5) * bounds * 2,
+            (Math.random() - 0.5) * bounds * 2,
+            (Math.random() - 0.5) * bounds * 2
+          );
+          mesh.position.copy(pos);
+          this.group.add(mesh);
+          this.meshes.push(mesh);
+          this.boids.push({
+            pos: pos.clone(),
+            vel: new THREE.Vector3(
+              (Math.random() - 0.5) * 2,
+              (Math.random() - 0.5) * 2,
+              (Math.random() - 0.5) * 2
+            )
+          });
+        }
+      },
+      _clearBoids() {
+        for (const m of this.meshes) {
+          this.group.remove(m);
+          m.geometry.dispose();
+          m.material.dispose();
+        }
+        this.boids = [];
+        this.meshes = [];
+      },
+      tick(t, dt) {
+        if (!this.data.enabled || !dt) return;
+        const dtS = Math.min(dt / 1000, 0.05);
+        const boids = this.boids;
+        const n = boids.length;
+        const sepW = this.data.separation;
+        const aliW = this.data.alignment;
+        const cohW = this.data.cohesion;
+        const maxSpd = this.data.speed;
+        const bounds = this.data.bounds;
+        const percepRad = 1.8;
+        const percepSq = percepRad * percepRad;
+        const sepRad = 0.6;
+        const sepSq = sepRad * sepRad;
+
+        const _sep = new THREE.Vector3();
+        const _ali = new THREE.Vector3();
+        const _coh = new THREE.Vector3();
+        const _diff = new THREE.Vector3();
+
+        for (let i = 0; i < n; i++) {
+          const b = boids[i];
+          _sep.set(0, 0, 0);
+          _ali.set(0, 0, 0);
+          _coh.set(0, 0, 0);
+          let sepCount = 0, aliCount = 0, cohCount = 0;
+
+          for (let j = 0; j < n; j++) {
+            if (i === j) continue;
+            _diff.subVectors(b.pos, boids[j].pos);
+            const dSq = _diff.lengthSq();
+            if (dSq < percepSq) {
+              if (dSq < sepSq && dSq > 0.0001) {
+                _sep.add(_diff.divideScalar(Math.sqrt(dSq)));
+                sepCount++;
+              }
+              _ali.add(boids[j].vel);
+              aliCount++;
+              _coh.add(boids[j].pos);
+              cohCount++;
+            }
+          }
+
+          if (sepCount > 0) { _sep.divideScalar(sepCount); _sep.multiplyScalar(sepW); b.vel.add(_sep.multiplyScalar(dtS * 8)); }
+          if (aliCount > 0) { _ali.divideScalar(aliCount); _ali.sub(b.vel); _ali.multiplyScalar(aliW); b.vel.add(_ali.multiplyScalar(dtS * 4)); }
+          if (cohCount > 0) { _coh.divideScalar(cohCount); _coh.sub(b.pos); _coh.multiplyScalar(cohW); b.vel.add(_coh.multiplyScalar(dtS * 2)); }
+
+          // Bounds steering
+          const margin = bounds * 0.8;
+          const turnForce = 3;
+          if (b.pos.x > margin) b.vel.x -= turnForce * dtS;
+          if (b.pos.x < -margin) b.vel.x += turnForce * dtS;
+          if (b.pos.y > margin) b.vel.y -= turnForce * dtS;
+          if (b.pos.y < -margin) b.vel.y += turnForce * dtS;
+          if (b.pos.z > margin) b.vel.z -= turnForce * dtS;
+          if (b.pos.z < -margin) b.vel.z += turnForce * dtS;
+
+          // Clamp speed
+          const spd = b.vel.length();
+          if (spd > maxSpd) b.vel.multiplyScalar(maxSpd / spd);
+          if (spd < maxSpd * 0.3) b.vel.multiplyScalar((maxSpd * 0.3) / (spd + 0.001));
+
+          // Update position
+          b.pos.addScaledVector(b.vel, dtS);
+
+          // Update mesh
+          const mesh = this.meshes[i];
+          mesh.position.copy(b.pos);
+          if (spd > 0.01) mesh.lookAt(b.pos.x + b.vel.x, b.pos.y + b.vel.y, b.pos.z + b.vel.z);
+        }
+      },
+      resetBoids() {
+        const bounds = this.data.bounds;
+        for (let i = 0; i < this.boids.length; i++) {
+          this.boids[i].pos.set(
+            (Math.random() - 0.5) * bounds * 2,
+            (Math.random() - 0.5) * bounds * 2,
+            (Math.random() - 0.5) * bounds * 2
+          );
+          this.boids[i].vel.set(
+            (Math.random() - 0.5) * 2,
+            (Math.random() - 0.5) * 2,
+            (Math.random() - 0.5) * 2
+          );
+          this.meshes[i].position.copy(this.boids[i].pos);
+        }
+      },
+      remove() { this._clearBoids(); this.el.object3D.remove(this.group); }
+    });
   </script>
 
   <style>
@@ -202,7 +361,9 @@
     #upload-panel label[for="file-input"].has-file { border-color: var(--success); color: var(--success); }
     #file-input { display: none; }
 
-    .model-selector {
+    .model-selector { flex-wrap: wrap; }
+    .model-selector .model-btn { min-width: 28%; }
+    .model-selector-row {
       display: flex; gap: 4px; margin-bottom: 12px; background: rgba(0,0,0,0.15);
       border-radius: 8px; padding: 3px;
     }
@@ -254,6 +415,9 @@
     .badge-svm { background: rgba(255,68,102,0.2); color: #ff4466; }
     .badge-lr { background: rgba(68,221,102,0.2); color: #44dd66; }
     .badge-nn { background: rgba(180,140,255,0.2); color: #b48cff; }
+    .badge-knn { background: rgba(68,200,255,0.2); color: #44c8ff; }
+    .badge-dt { background: rgba(255,200,68,0.2); color: #ffc844; }
+    .badge-rf { background: rgba(68,255,150,0.2); color: #44ff96; }
 
     #controls-panel {
       bottom: 20px; right: 20px; border-color: var(--panel-border-light);
@@ -347,6 +511,76 @@
     .fade-in { animation: fadeIn 0.4s ease forwards; }
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
     .loading-pulse { animation: pulse 1.2s ease infinite; }
+
+    /* ══════════ Mobile / Responsive ══════════ */
+    @media (max-width: 768px) {
+      .panel { padding: 12px 14px; border-radius: 10px; max-width: calc(100vw - 24px) !important; }
+
+      #upload-panel {
+        top: 10px; left: 10px; right: 10px; max-width: none !important;
+      }
+      #upload-panel h2 { font-size: 15px; }
+      .model-btn { font-size: 10px; padding: 6px 2px; }
+      #upload-btn { padding: 10px; font-size: 13px; }
+
+      #info-panel {
+        top: auto; bottom: 10px; left: 10px; right: 10px;
+        max-width: none !important; min-width: 0;
+      }
+
+      #legend {
+        bottom: 10px; left: 10px; font-size: 11px;
+        max-width: 160px;
+      }
+      #legend.shifted-up { bottom: 260px; }
+
+      #controls-panel {
+        bottom: 10px; right: 10px; left: auto;
+        max-width: 200px; font-size: 10px;
+      }
+      #controls-panel .control-row label { min-width: 45px; font-size: 10px; }
+
+      #train-panel {
+        top: auto; bottom: 10px; left: 10px; right: 10px;
+        max-width: none !important;
+      }
+
+      #sim-panel {
+        bottom: 10px !important; right: 10px !important; left: 10px;
+        max-width: none !important; min-width: 0 !important;
+      }
+
+      #tooltip-3d { font-size: 11px; max-width: 200px; }
+      #theme-toggle { width: 30px; height: 30px; font-size: 14px; }
+    }
+
+    @media (max-width: 480px) {
+      .panel { padding: 10px 12px; }
+      #upload-panel { top: 6px; left: 6px; right: 6px; }
+      #upload-panel h2 { font-size: 13px; }
+      .model-selector { gap: 3px; }
+      .model-selector .model-btn { min-width: 30%; font-size: 9px; padding: 5px 1px; }
+      #upload-btn { padding: 8px; font-size: 12px; }
+      #train-live-btn, #sim-toggle-btn { font-size: 10px !important; padding: 7px !important; }
+
+      #info-panel { font-size: 11px; }
+      #legend { font-size: 10px; max-width: 140px; }
+      #controls-panel { font-size: 9px; max-width: 170px; }
+      #controls-panel .control-row label { min-width: 40px; font-size: 9px; }
+
+      .toggle-btn { font-size: 9px; padding: 5px 3px; min-width: 36px; }
+    }
+
+    /* Touch-friendly: larger tap targets */
+    @media (pointer: coarse) {
+      .model-btn { padding: 9px 4px; min-height: 36px; }
+      #upload-btn { padding: 14px; min-height: 44px; font-size: 14px; }
+      #train-live-btn, #sim-toggle-btn { min-height: 40px !important; }
+      .toggle-btn { padding: 8px 6px; min-height: 36px; }
+      #theme-toggle { width: 36px; height: 36px; font-size: 18px; }
+      input[type="range"] { height: 8px !important; }
+      .train-ctrl-btn { min-height: 36px; }
+    }
   </style>
 </head>
 <body>
@@ -368,10 +602,53 @@
       <button class="model-btn active" data-model="svm">SVM</button>
       <button class="model-btn" data-model="linear_regression">Linear Reg</button>
       <button class="model-btn" data-model="neural_network">Neural Net</button>
+      <button class="model-btn" data-model="knn">KNN</button>
+      <button class="model-btn" data-model="decision_tree">D-Tree</button>
+      <button class="model-btn" data-model="random_forest">R-Forest</button>
     </div>
     <button id="upload-btn" disabled>Visualize</button>
-    <button id="train-live-btn" disabled style="width:100%; padding:9px; border:1px solid rgba(180,140,255,0.4); border-radius:8px; background:transparent; color:#b48cff; font-size:12px; font-weight:600; cursor:pointer; margin-top:6px; transition:all 0.2s ease;">Train Live (NN)</button>
+    <div style="display:flex; gap:6px; margin-top:6px;">
+      <button id="train-live-btn" disabled style="flex:1; padding:9px; border:1px solid rgba(180,140,255,0.4); border-radius:8px; background:transparent; color:#b48cff; font-size:11px; font-weight:600; cursor:pointer; transition:all 0.2s ease;">Train Live (NN)</button>
+      <button id="sim-toggle-btn" style="flex:1; padding:9px; border:1px solid rgba(68,220,255,0.4); border-radius:8px; background:transparent; color:#44ddff; font-size:11px; font-weight:600; cursor:pointer; transition:all 0.2s ease;">3D Simulation</button>
+    </div>
     <div id="status"></div>
+  </div>
+
+  <!-- Simulation Control Panel -->
+  <div id="sim-panel" class="panel" style="display: none; position: fixed; bottom: 20px; right: 20px; min-width: 220px; z-index: 120;">
+    <h3 style="margin:0 0 10px; font-size:14px; color:#44ddff;">Boids Simulation</h3>
+    <div style="display:flex; flex-direction:column; gap:8px; font-size:11px;">
+      <div style="display:flex; align-items:center; gap:6px;">
+        <label style="width:65px; color:var(--text-muted);">Count</label>
+        <input type="range" id="sim-count" min="30" max="300" step="10" value="120" style="flex:1;" />
+        <span id="sim-count-val" style="width:28px; text-align:right; color:var(--text);">120</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <label style="width:65px; color:var(--text-muted);">Speed</label>
+        <input type="range" id="sim-speed" min="0.5" max="6" step="0.1" value="2" style="flex:1;" />
+        <span id="sim-speed-val" style="width:28px; text-align:right; color:var(--text);">2.0</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <label style="width:65px; color:var(--text-muted);">Separation</label>
+        <input type="range" id="sim-sep" min="0" max="4" step="0.1" value="1.5" style="flex:1;" />
+        <span id="sim-sep-val" style="width:28px; text-align:right; color:var(--text);">1.5</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <label style="width:65px; color:var(--text-muted);">Alignment</label>
+        <input type="range" id="sim-align" min="0" max="4" step="0.1" value="1.0" style="flex:1;" />
+        <span id="sim-align-val" style="width:28px; text-align:right; color:var(--text);">1.0</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <label style="width:65px; color:var(--text-muted);">Cohesion</label>
+        <input type="range" id="sim-coh" min="0" max="4" step="0.1" value="1.0" style="flex:1;" />
+        <span id="sim-coh-val" style="width:28px; text-align:right; color:var(--text);">1.0</span>
+      </div>
+    </div>
+    <div style="display:flex; gap:4px; margin-top:10px;">
+      <button id="sim-pause" class="toggle-btn" style="flex:1;">Pause</button>
+      <button id="sim-reset" class="toggle-btn" style="flex:1;">Reset</button>
+      <button id="sim-close" class="toggle-btn" style="flex:1;">Close</button>
+    </div>
   </div>
 
   <!-- Training Animation Panel -->
@@ -462,6 +739,17 @@
     <a-light type="point" color="#ffffff" intensity="0.2" position="0 3 0"></a-light>
     <a-light type="point" color="#334488" intensity="0.15" position="0 -3 0" distance="30"></a-light>
     <a-light type="point" color="#443366" intensity="0.1" position="-10 5 -15" distance="40"></a-light>
+
+    <!-- Dark mode accent lights (colored spotlights illuminating the scene) -->
+    <a-light id="dark-light-1" type="point" color="#4466ff" intensity="0.4" position="8 6 -8" distance="35"
+      animation="property: intensity; from: 0.25; to: 0.5; dur: 4000; dir: alternate; loop: true; easing: easeInOutSine"></a-light>
+    <a-light id="dark-light-2" type="point" color="#8844ff" intensity="0.3" position="-8 4 8" distance="30"
+      animation="property: intensity; from: 0.2; to: 0.4; dur: 5000; dir: alternate; loop: true; easing: easeInOutSine"></a-light>
+    <a-light id="dark-light-3" type="point" color="#44aaff" intensity="0.25" position="0 8 -12" distance="40"
+      animation="property: intensity; from: 0.15; to: 0.35; dur: 3500; dir: alternate; loop: true; easing: easeInOutSine"></a-light>
+    <a-light id="dark-light-4" type="spot" color="#6644cc" intensity="0.6" position="0 12 0" distance="25"
+      angle="45" penumbra="0.8" target="#bounding-cube"
+      animation="property: intensity; from: 0.4; to: 0.7; dur: 6000; dir: alternate; loop: true; easing: easeInOutSine"></a-light>
 
     <!-- VR Environment -->
     <a-entity id="environment-group">
@@ -661,20 +949,445 @@
     <!-- ══════════ BYTE REALITY 3D Title ══════════ -->
     <a-entity id="title-group" position="0 4.5 -4">
       <!-- Main title text -->
-      <a-text value="Byte Reality" position="0 0 0" color="#8ab4ff"
+      <a-text id="title-main" value="Byte Reality" position="0 0 0" color="#8ab4ff"
         align="center" scale="5 5 5" font="mozillavr"
-        animation="property: position; from: 0 -0.08 0; to: 0 0.08 0; dur: 4000; dir: alternate; loop: true; easing: easeInOutSine"></a-text>
+        animation__float="property: position; from: 0 -0.08 0; to: 0 0.08 0; dur: 4000; dir: alternate; loop: true; easing: easeInOutSine"></a-text>
       <!-- Glow duplicate behind for bloom effect -->
-      <a-text value="Byte Reality" position="0 0 -0.05" color="#4466cc"
+      <a-text id="title-glow" value="Byte Reality" position="0 0 -0.05" color="#4466cc"
         align="center" scale="5.1 5.1 5.1" font="mozillavr"
         material="opacity: 0.3"
-        animation="property: position; from: 0 -0.08 -0.05; to: 0 0.08 -0.05; dur: 4000; dir: alternate; loop: true; easing: easeInOutSine"></a-text>
+        animation__float="property: position; from: 0 -0.08 -0.05; to: 0 0.08 -0.05; dur: 4000; dir: alternate; loop: true; easing: easeInOutSine"></a-text>
       <!-- Decorative line under title -->
-      <a-box position="0 -0.5 0" width="7" height="0.025" depth="0.025"
+      <a-box id="title-line" position="0 -0.5 0" width="7" height="0.025" depth="0.025"
         material="color: #4466cc; emissive: #4466cc; emissiveIntensity: 0.6; opacity: 0.5"
         animation="property: material.emissiveIntensity; from: 0.3; to: 0.8; dur: 2500; dir: alternate; loop: true"></a-box>
-      <a-sphere position="-3.5 -0.5 0" radius="0.05" material="color: #8ab4ff; emissive: #8ab4ff; emissiveIntensity: 0.8; opacity: 0.7"></a-sphere>
-      <a-sphere position="3.5 -0.5 0" radius="0.05" material="color: #8ab4ff; emissive: #8ab4ff; emissiveIntensity: 0.8; opacity: 0.7"></a-sphere>
+      <a-sphere id="title-orb-l" position="-3.5 -0.5 0" radius="0.05" material="color: #8ab4ff; emissive: #8ab4ff; emissiveIntensity: 0.8; opacity: 0.7"></a-sphere>
+      <a-sphere id="title-orb-r" position="3.5 -0.5 0" radius="0.05" material="color: #8ab4ff; emissive: #8ab4ff; emissiveIntensity: 0.8; opacity: 0.7"></a-sphere>
+      <!-- Shockwave ring (hidden, triggered on visualize) -->
+      <a-torus id="title-shockwave" position="0 0 0" rotation="90 0 0" radius="0.1" radius-tubular="0.04"
+        material="color: #8ab4ff; emissive: #8ab4ff; emissiveIntensity: 1.0; opacity: 0; transparent: true" visible="false"></a-torus>
+    </a-entity>
+
+    <!-- ══════════ SCATTERED BACKGROUND OBJECTS (fill the space) ══════════ -->
+    <!-- Distant floating cubes -->
+    <a-entity position="-35 2 -25"
+      animation="property: rotation; to: 360 180 90; dur: 50000; loop: true; easing: linear"
+      animation__bob="property: position; from: -35 1 -25; to: -35 3 -25; dur: 8000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-box width="1.2" height="1.2" depth="1.2" material="color: #2244aa; wireframe: true; opacity: 0.08; emissive: #2244aa; emissiveIntensity: 0.3"></a-box>
+    </a-entity>
+    <a-entity position="40 5 -35"
+      animation="property: rotation; to: 180 360 0; dur: 60000; loop: true; easing: linear"
+      animation__bob="property: position; from: 40 4 -35; to: 40 6 -35; dur: 10000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-box width="0.8" height="0.8" depth="0.8" material="color: #6633aa; wireframe: true; opacity: 0.06; emissive: #6633aa; emissiveIntensity: 0.25"></a-box>
+    </a-entity>
+    <a-entity position="-20 8 30"
+      animation="property: rotation; to: 90 360 180; dur: 45000; loop: true; easing: linear"
+      animation__bob="property: position; from: -20 7 30; to: -20 9 30; dur: 9000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-box width="1.5" height="1.5" depth="1.5" material="color: #3366bb; wireframe: true; opacity: 0.06; emissive: #3366bb; emissiveIntensity: 0.2"></a-box>
+    </a-entity>
+
+    <!-- Distant floating torus knots / rings -->
+    <a-entity position="30 3 25"
+      animation="property: rotation; to: 0 360 0; dur: 35000; loop: true; easing: linear"
+      animation__bob="property: position; from: 30 2 25; to: 30 4 25; dur: 7000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-torus radius="0.7" radius-tubular="0.04" material="color: #4455cc; wireframe: true; opacity: 0.07; emissive: #4455cc; emissiveIntensity: 0.3"></a-torus>
+    </a-entity>
+    <a-entity position="-40 6 -40"
+      animation="property: rotation; to: 360 0 180; dur: 55000; loop: true; easing: linear"
+      animation__bob="property: position; from: -40 5 -40; to: -40 7 -40; dur: 11000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-torus radius="0.9" radius-tubular="0.03" material="color: #5544bb; wireframe: true; opacity: 0.05; emissive: #5544bb; emissiveIntensity: 0.25"></a-torus>
+    </a-entity>
+
+    <!-- Distant floating pyramids -->
+    <a-entity position="25 1 -45"
+      animation="property: rotation; to: 0 360 0; dur: 40000; loop: true; easing: linear"
+      animation__bob="property: position; from: 25 0.5 -45; to: 25 2 -45; dur: 8500; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-cone radius-bottom="0.8" height="1.4" segments-radial="4" material="color: #aa3366; wireframe: true; opacity: 0.06; emissive: #aa3366; emissiveIntensity: 0.25"></a-cone>
+    </a-entity>
+    <a-entity position="-30 4 35"
+      animation="property: rotation; to: 180 360 90; dur: 48000; loop: true; easing: linear"
+      animation__bob="property: position; from: -30 3 35; to: -30 5 35; dur: 9500; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-cone radius-bottom="0.6" height="1.1" segments-radial="4" material="color: #3388aa; wireframe: true; opacity: 0.06; emissive: #3388aa; emissiveIntensity: 0.2"></a-cone>
+    </a-entity>
+
+    <!-- Distant floating spheres (solid, glowing) -->
+    <a-entity position="45 10 -20"
+      animation__bob="property: position; from: 45 9 -20; to: 45 11 -20; dur: 6000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-sphere radius="0.4" material="color: #334488; opacity: 0.12; emissive: #334488; emissiveIntensity: 0.4"></a-sphere>
+    </a-entity>
+    <a-entity position="-45 7 15"
+      animation__bob="property: position; from: -45 6 15; to: -45 8 15; dur: 7500; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-sphere radius="0.5" material="color: #553388; opacity: 0.1; emissive: #553388; emissiveIntensity: 0.35"></a-sphere>
+    </a-entity>
+    <a-entity position="15 12 40"
+      animation__bob="property: position; from: 15 11 40; to: 15 13 40; dur: 8000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-sphere radius="0.35" material="color: #225588; opacity: 0.1; emissive: #225588; emissiveIntensity: 0.35"></a-sphere>
+    </a-entity>
+
+    <!-- Far-away wireframe cluster (like distant space debris) -->
+    <a-entity position="-50 3 -55"
+      animation="property: rotation; to: 360 360 360; dur: 90000; loop: true; easing: linear">
+      <a-icosahedron radius="1.2" material="color: #223366; wireframe: true; opacity: 0.04; emissive: #223366; emissiveIntensity: 0.15"></a-icosahedron>
+      <a-octahedron position="1.5 0.8 0" radius="0.5" material="color: #334477; wireframe: true; opacity: 0.04; emissive: #334477; emissiveIntensity: 0.15"></a-octahedron>
+    </a-entity>
+    <a-entity position="50 8 45"
+      animation="property: rotation; to: 180 360 0; dur: 75000; loop: true; easing: linear">
+      <a-dodecahedron radius="0.9" material="color: #443366; wireframe: true; opacity: 0.04; emissive: #443366; emissiveIntensity: 0.15"></a-dodecahedron>
+      <a-tetrahedron position="-1 0.5 0.5" radius="0.4" material="color: #554477; wireframe: true; opacity: 0.04; emissive: #554477; emissiveIntensity: 0.15"></a-tetrahedron>
+    </a-entity>
+
+    <!-- ══════════ MORE SCATTERED BACKGROUND OBJECTS ══════════ -->
+
+    <!-- Wireframe cubes — mid distance -->
+    <a-entity position="18 1 20"
+      animation="property: rotation; to: 360 0 180; dur: 42000; loop: true; easing: linear"
+      animation__bob="property: position; from: 18 0.5 20; to: 18 2 20; dur: 7000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-box width="0.9" height="0.9" depth="0.9" material="color: #2255aa; wireframe: true; opacity: 0.07; emissive: #2255aa; emissiveIntensity: 0.25"></a-box>
+    </a-entity>
+    <a-entity position="-22 3 -15"
+      animation="property: rotation; to: 90 270 180; dur: 55000; loop: true; easing: linear"
+      animation__bob="property: position; from: -22 2 -15; to: -22 4 -15; dur: 9000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-box width="1.1" height="1.1" depth="1.1" material="color: #4433aa; wireframe: true; opacity: 0.06; emissive: #4433aa; emissiveIntensity: 0.22"></a-box>
+    </a-entity>
+    <a-entity position="55 4 -10"
+      animation="property: rotation; to: 180 360 90; dur: 65000; loop: true; easing: linear"
+      animation__bob="property: position; from: 55 3 -10; to: 55 5 -10; dur: 11000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-box width="1.8" height="1.8" depth="1.8" material="color: #223377; wireframe: true; opacity: 0.03; emissive: #223377; emissiveIntensity: 0.12"></a-box>
+    </a-entity>
+
+    <!-- Wireframe rings — various angles -->
+    <a-entity position="-15 5 25"
+      animation="property: rotation; to: 360 180 0; dur: 38000; loop: true; easing: linear"
+      animation__bob="property: position; from: -15 4 25; to: -15 6 25; dur: 8500; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-torus radius="0.55" radius-tubular="0.035" material="color: #3366aa; wireframe: true; opacity: 0.07; emissive: #3366aa; emissiveIntensity: 0.28"></a-torus>
+    </a-entity>
+    <a-entity position="35 9 15"
+      animation="property: rotation; to: 0 360 180; dur: 44000; loop: true; easing: linear"
+      animation__bob="property: position; from: 35 8 15; to: 35 10 15; dur: 7000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-torus radius="0.8" radius-tubular="0.03" material="color: #5533bb; wireframe: true; opacity: 0.05; emissive: #5533bb; emissiveIntensity: 0.22"></a-torus>
+    </a-entity>
+    <a-entity position="-55 6 -30"
+      animation="property: rotation; to: 180 0 360; dur: 70000; loop: true; easing: linear">
+      <a-torus radius="1.1" radius-tubular="0.025" material="color: #224488; wireframe: true; opacity: 0.03; emissive: #224488; emissiveIntensity: 0.12"></a-torus>
+    </a-entity>
+
+    <!-- Pyramids / cones -->
+    <a-entity position="-35 1 18"
+      animation="property: rotation; to: 0 360 0; dur: 50000; loop: true; easing: linear"
+      animation__bob="property: position; from: -35 0.5 18; to: -35 2 18; dur: 9000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-cone radius-bottom="0.6" height="1.2" segments-radial="3" material="color: #cc4455; wireframe: true; opacity: 0.05; emissive: #cc4455; emissiveIntensity: 0.2"></a-cone>
+    </a-entity>
+    <a-entity position="22 7 -38"
+      animation="property: rotation; to: 360 180 0; dur: 42000; loop: true; easing: linear"
+      animation__bob="property: position; from: 22 6 -38; to: 22 8 -38; dur: 8000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-cone radius-bottom="0.5" height="0.9" segments-radial="5" material="color: #3399aa; wireframe: true; opacity: 0.05; emissive: #3399aa; emissiveIntensity: 0.2"></a-cone>
+    </a-entity>
+    <a-entity position="48 2 30"
+      animation="property: rotation; to: 180 360 90; dur: 58000; loop: true; easing: linear">
+      <a-cone radius-bottom="0.9" height="1.6" segments-radial="4" material="color: #aa5533; wireframe: true; opacity: 0.04; emissive: #aa5533; emissiveIntensity: 0.15"></a-cone>
+    </a-entity>
+
+    <!-- Glowing orbs -->
+    <a-entity position="-28 9 -10"
+      animation__bob="property: position; from: -28 8 -10; to: -28 10 -10; dur: 5500; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-sphere radius="0.2" material="color: #4488dd; emissive: #4488dd; emissiveIntensity: 0.8; opacity: 0.5"></a-sphere>
+    </a-entity>
+    <a-entity position="32 4 -18"
+      animation__bob="property: position; from: 32 3 -18; to: 32 5 -18; dur: 6000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-sphere radius="0.15" material="color: #dd6688; emissive: #dd6688; emissiveIntensity: 0.7; opacity: 0.4"></a-sphere>
+    </a-entity>
+    <a-entity position="-10 11 -35"
+      animation__bob="property: position; from: -10 10 -35; to: -10 12 -35; dur: 7000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-sphere radius="0.25" material="color: #66cc88; emissive: #66cc88; emissiveIntensity: 0.7; opacity: 0.4"></a-sphere>
+    </a-entity>
+    <a-entity position="20 6 35"
+      animation__bob="property: position; from: 20 5 35; to: 20 7 35; dur: 5000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-sphere radius="0.18" material="color: #ffaa44; emissive: #ffaa44; emissiveIntensity: 0.7; opacity: 0.45"></a-sphere>
+    </a-entity>
+    <a-entity position="-48 3 22"
+      animation__bob="property: position; from: -48 2 22; to: -48 4 22; dur: 6500; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-sphere radius="0.3" material="color: #aa44ff; emissive: #aa44ff; emissiveIntensity: 0.6; opacity: 0.35"></a-sphere>
+    </a-entity>
+
+    <!-- Icosahedrons -->
+    <a-entity position="38 11 -50"
+      animation="property: rotation; to: 360 180 90; dur: 80000; loop: true; easing: linear">
+      <a-icosahedron radius="0.8" material="color: #2255aa; wireframe: true; opacity: 0.04; emissive: #2255aa; emissiveIntensity: 0.15"></a-icosahedron>
+    </a-entity>
+    <a-entity position="-42 8 40"
+      animation="property: rotation; to: 180 360 0; dur: 60000; loop: true; easing: linear"
+      animation__bob="property: position; from: -42 7 40; to: -42 9 40; dur: 10000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-icosahedron radius="0.6" material="color: #445599; wireframe: true; opacity: 0.05; emissive: #445599; emissiveIntensity: 0.2"></a-icosahedron>
+    </a-entity>
+
+    <!-- Octahedrons (diamond shapes) -->
+    <a-entity position="12 3 -30"
+      animation="property: rotation; to: 0 360 180; dur: 36000; loop: true; easing: linear"
+      animation__bob="property: position; from: 12 2 -30; to: 12 4 -30; dur: 7500; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-octahedron radius="0.45" material="color: #6655bb; wireframe: true; opacity: 0.06; emissive: #6655bb; emissiveIntensity: 0.25"></a-octahedron>
+    </a-entity>
+    <a-entity position="-18 10 -42"
+      animation="property: rotation; to: 360 0 360; dur: 52000; loop: true; easing: linear">
+      <a-octahedron radius="0.55" material="color: #3377aa; wireframe: true; opacity: 0.04; emissive: #3377aa; emissiveIntensity: 0.18"></a-octahedron>
+    </a-entity>
+
+    <!-- Double-ring structures (atom-like) -->
+    <a-entity position="42 6 -28"
+      animation="property: rotation; to: 0 360 0; dur: 25000; loop: true; easing: linear">
+      <a-torus radius="0.6" radius-tubular="0.015" rotation="0 0 0" material="color: #4466cc; wireframe: false; opacity: 0.06; emissive: #4466cc; emissiveIntensity: 0.3"></a-torus>
+      <a-torus radius="0.6" radius-tubular="0.015" rotation="90 0 0" material="color: #6644cc; wireframe: false; opacity: 0.06; emissive: #6644cc; emissiveIntensity: 0.3"></a-torus>
+      <a-sphere radius="0.08" material="color: #88aaff; emissive: #88aaff; emissiveIntensity: 1.0; opacity: 0.6"></a-sphere>
+    </a-entity>
+    <a-entity position="-38 4 -48"
+      animation="property: rotation; to: 360 0 0; dur: 30000; loop: true; easing: linear">
+      <a-torus radius="0.5" radius-tubular="0.012" rotation="0 0 0" material="color: #5566bb; wireframe: false; opacity: 0.05; emissive: #5566bb; emissiveIntensity: 0.25"></a-torus>
+      <a-torus radius="0.5" radius-tubular="0.012" rotation="60 0 90" material="color: #7755bb; wireframe: false; opacity: 0.05; emissive: #7755bb; emissiveIntensity: 0.25"></a-torus>
+      <a-torus radius="0.5" radius-tubular="0.012" rotation="0 60 45" material="color: #5577bb; wireframe: false; opacity: 0.05; emissive: #5577bb; emissiveIntensity: 0.25"></a-torus>
+      <a-sphere radius="0.06" material="color: #ffaa88; emissive: #ffaa88; emissiveIntensity: 1.0; opacity: 0.5"></a-sphere>
+    </a-entity>
+
+    <!-- Horizontal ring platforms (like space stations) -->
+    <a-entity position="28 0.5 42"
+      animation="property: rotation; to: 0 360 0; dur: 50000; loop: true; easing: linear">
+      <a-torus radius="1.2" radius-tubular="0.02" rotation="90 0 0" material="color: #334477; opacity: 0.05; emissive: #334477; emissiveIntensity: 0.2"></a-torus>
+      <a-torus radius="0.6" radius-tubular="0.015" rotation="90 0 0" material="color: #445588; opacity: 0.06; emissive: #445588; emissiveIntensity: 0.25"></a-torus>
+    </a-entity>
+
+    <!-- Dodecahedrons -->
+    <a-entity position="-55 10 10"
+      animation="property: rotation; to: 360 360 0; dur: 85000; loop: true; easing: linear">
+      <a-dodecahedron radius="0.7" material="color: #335577; wireframe: true; opacity: 0.03; emissive: #335577; emissiveIntensity: 0.12"></a-dodecahedron>
+    </a-entity>
+    <a-entity position="15 14 -55"
+      animation="property: rotation; to: 0 360 360; dur: 70000; loop: true; easing: linear"
+      animation__bob="property: position; from: 15 13 -55; to: 15 15 -55; dur: 12000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-dodecahedron radius="0.5" material="color: #556688; wireframe: true; opacity: 0.04; emissive: #556688; emissiveIntensity: 0.15"></a-dodecahedron>
+    </a-entity>
+
+    <!-- Tall vertical pillars (distant, decorative) -->
+    <a-cylinder position="-35 5 -50" radius="0.03" height="20"
+      material="color: #2233aa; opacity: 0.03; emissive: #2233aa; emissiveIntensity: 0.2"></a-cylinder>
+    <a-cylinder position="40 5 40" radius="0.03" height="18"
+      material="color: #3322aa; opacity: 0.03; emissive: #3322aa; emissiveIntensity: 0.2"></a-cylinder>
+    <a-cylinder position="55 6 -45" radius="0.025" height="22"
+      material="color: #223388; opacity: 0.025; emissive: #223388; emissiveIntensity: 0.15"></a-cylinder>
+    <a-cylinder position="-50 5 35" radius="0.025" height="20"
+      material="color: #332288; opacity: 0.025; emissive: #332288; emissiveIntensity: 0.15"></a-cylinder>
+
+    <!-- ══════════ COLORFUL FLOATING OBJECTS — WAVE 2 ══════════ -->
+
+    <!-- ── Neon cubes (bright, vibrant) ── -->
+    <a-entity position="-25 6 18"
+      animation="property: rotation; to: 360 180 90; dur: 32000; loop: true; easing: linear"
+      animation__bob="property: position; from: -25 5 18; to: -25 7 18; dur: 6000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-box width="0.7" height="0.7" depth="0.7" material="color: #ff3366; wireframe: true; opacity: 0.15; emissive: #ff3366; emissiveIntensity: 0.6"></a-box>
+    </a-entity>
+    <a-entity position="30 8 22"
+      animation="property: rotation; to: 180 360 0; dur: 38000; loop: true; easing: linear"
+      animation__bob="property: position; from: 30 7 22; to: 30 9 22; dur: 7000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-box width="1.0" height="1.0" depth="1.0" material="color: #33ff88; wireframe: true; opacity: 0.12; emissive: #33ff88; emissiveIntensity: 0.5"></a-box>
+    </a-entity>
+    <a-entity position="-48 2 -18"
+      animation="property: rotation; to: 90 270 360; dur: 45000; loop: true; easing: linear"
+      animation__bob="property: position; from: -48 1 -18; to: -48 3 -18; dur: 8000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-box width="0.6" height="0.6" depth="0.6" material="color: #ffcc00; wireframe: true; opacity: 0.14; emissive: #ffcc00; emissiveIntensity: 0.55"></a-box>
+    </a-entity>
+    <a-entity position="50 10 18"
+      animation="property: rotation; to: 270 90 180; dur: 52000; loop: true; easing: linear">
+      <a-box width="1.3" height="1.3" depth="1.3" material="color: #00ccff; wireframe: true; opacity: 0.08; emissive: #00ccff; emissiveIntensity: 0.4"></a-box>
+    </a-entity>
+
+    <!-- ── Bright glowing orbs (candy colors, pulsing) ── -->
+    <a-entity position="-12 4 22"
+      animation__bob="property: position; from: -12 3 22; to: -12 5 22; dur: 4500; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-sphere radius="0.18" material="color: #ff4488; emissive: #ff4488; emissiveIntensity: 1.0; opacity: 0.7"
+        animation="property: material.emissiveIntensity; from: 0.6; to: 1.0; dur: 2000; dir: alternate; loop: true"></a-sphere>
+    </a-entity>
+    <a-entity position="18 9 -22"
+      animation__bob="property: position; from: 18 8 -22; to: 18 10 -22; dur: 5000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-sphere radius="0.22" material="color: #44ff66; emissive: #44ff66; emissiveIntensity: 1.0; opacity: 0.65"
+        animation="property: material.emissiveIntensity; from: 0.5; to: 1.0; dur: 2500; dir: alternate; loop: true"></a-sphere>
+    </a-entity>
+    <a-entity position="-32 7 -28"
+      animation__bob="property: position; from: -32 6 -28; to: -32 8 -28; dur: 5500; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-sphere radius="0.2" material="color: #ff9922; emissive: #ff9922; emissiveIntensity: 1.0; opacity: 0.7"
+        animation="property: material.emissiveIntensity; from: 0.6; to: 1.0; dur: 1800; dir: alternate; loop: true"></a-sphere>
+    </a-entity>
+    <a-entity position="26 3 32"
+      animation__bob="property: position; from: 26 2 32; to: 26 4 32; dur: 4000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-sphere radius="0.16" material="color: #cc44ff; emissive: #cc44ff; emissiveIntensity: 1.0; opacity: 0.7"
+        animation="property: material.emissiveIntensity; from: 0.6; to: 1.0; dur: 2200; dir: alternate; loop: true"></a-sphere>
+    </a-entity>
+    <a-entity position="-8 11 -40"
+      animation__bob="property: position; from: -8 10 -40; to: -8 12 -40; dur: 6000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-sphere radius="0.25" material="color: #00eeff; emissive: #00eeff; emissiveIntensity: 1.0; opacity: 0.6"
+        animation="property: material.emissiveIntensity; from: 0.5; to: 1.0; dur: 3000; dir: alternate; loop: true"></a-sphere>
+    </a-entity>
+    <a-entity position="42 5 -8"
+      animation__bob="property: position; from: 42 4 -8; to: 42 6 -8; dur: 4800; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-sphere radius="0.14" material="color: #ffee00; emissive: #ffee00; emissiveIntensity: 1.0; opacity: 0.7"
+        animation="property: material.emissiveIntensity; from: 0.6; to: 1.0; dur: 1600; dir: alternate; loop: true"></a-sphere>
+    </a-entity>
+    <a-entity position="-42 8 12"
+      animation__bob="property: position; from: -42 7 12; to: -42 9 12; dur: 5200; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-sphere radius="0.2" material="color: #ff66cc; emissive: #ff66cc; emissiveIntensity: 1.0; opacity: 0.65"
+        animation="property: material.emissiveIntensity; from: 0.5; to: 1.0; dur: 2800; dir: alternate; loop: true"></a-sphere>
+    </a-entity>
+    <a-entity position="8 6 38"
+      animation__bob="property: position; from: 8 5 38; to: 8 7 38; dur: 3800; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-sphere radius="0.15" material="color: #66ff44; emissive: #66ff44; emissiveIntensity: 1.0; opacity: 0.7"
+        animation="property: material.emissiveIntensity; from: 0.7; to: 1.0; dur: 1500; dir: alternate; loop: true"></a-sphere>
+    </a-entity>
+
+    <!-- ── Colorful wireframe icosahedrons ── -->
+    <a-entity position="-18 3 38"
+      animation="property: rotation; to: 360 0 180; dur: 48000; loop: true; easing: linear"
+      animation__bob="property: position; from: -18 2 38; to: -18 4 38; dur: 9000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-icosahedron radius="0.55" material="color: #ff5544; wireframe: true; opacity: 0.1; emissive: #ff5544; emissiveIntensity: 0.45"></a-icosahedron>
+    </a-entity>
+    <a-entity position="35 12 -15"
+      animation="property: rotation; to: 180 360 90; dur: 55000; loop: true; easing: linear">
+      <a-icosahedron radius="0.7" material="color: #44ddff; wireframe: true; opacity: 0.08; emissive: #44ddff; emissiveIntensity: 0.4"></a-icosahedron>
+    </a-entity>
+    <a-entity position="-55 5 -15"
+      animation="property: rotation; to: 90 180 360; dur: 62000; loop: true; easing: linear"
+      animation__bob="property: position; from: -55 4 -15; to: -55 6 -15; dur: 10000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-icosahedron radius="0.9" material="color: #ffaa22; wireframe: true; opacity: 0.06; emissive: #ffaa22; emissiveIntensity: 0.35"></a-icosahedron>
+    </a-entity>
+
+    <!-- ── Colorful octahedrons (diamond shapes) ── -->
+    <a-entity position="22 2 28"
+      animation="property: rotation; to: 360 360 0; dur: 30000; loop: true; easing: linear"
+      animation__bob="property: position; from: 22 1 28; to: 22 3 28; dur: 6500; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-octahedron radius="0.4" material="color: #ff33aa; wireframe: true; opacity: 0.12; emissive: #ff33aa; emissiveIntensity: 0.5"></a-octahedron>
+    </a-entity>
+    <a-entity position="-28 10 -38"
+      animation="property: rotation; to: 0 360 360; dur: 42000; loop: true; easing: linear">
+      <a-octahedron radius="0.5" material="color: #33ffcc; wireframe: true; opacity: 0.1; emissive: #33ffcc; emissiveIntensity: 0.45"></a-octahedron>
+    </a-entity>
+    <a-entity position="48 7 -35"
+      animation="property: rotation; to: 180 0 360; dur: 50000; loop: true; easing: linear"
+      animation__bob="property: position; from: 48 6 -35; to: 48 8 -35; dur: 8000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-octahedron radius="0.35" material="color: #ffdd44; wireframe: true; opacity: 0.1; emissive: #ffdd44; emissiveIntensity: 0.45"></a-octahedron>
+    </a-entity>
+
+    <!-- ── Colorful torus rings ── -->
+    <a-entity position="-38 6 28"
+      animation="property: rotation; to: 360 180 0; dur: 28000; loop: true; easing: linear"
+      animation__bob="property: position; from: -38 5 28; to: -38 7 28; dur: 7000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-torus radius="0.5" radius-tubular="0.04" material="color: #ff4466; wireframe: false; opacity: 0.1; emissive: #ff4466; emissiveIntensity: 0.5"></a-torus>
+    </a-entity>
+    <a-entity position="15 4 -42"
+      animation="property: rotation; to: 0 360 180; dur: 34000; loop: true; easing: linear"
+      animation__bob="property: position; from: 15 3 -42; to: 15 5 -42; dur: 8500; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-torus radius="0.6" radius-tubular="0.03" material="color: #44ff88; wireframe: false; opacity: 0.08; emissive: #44ff88; emissiveIntensity: 0.45"></a-torus>
+    </a-entity>
+    <a-entity position="-10 9 -50"
+      animation="property: rotation; to: 180 360 90; dur: 40000; loop: true; easing: linear">
+      <a-torus radius="0.7" radius-tubular="0.035" material="color: #ff8800; wireframe: false; opacity: 0.07; emissive: #ff8800; emissiveIntensity: 0.4"></a-torus>
+    </a-entity>
+    <a-entity position="42 11 28"
+      animation="property: rotation; to: 360 0 180; dur: 46000; loop: true; easing: linear">
+      <a-torus radius="0.45" radius-tubular="0.03" material="color: #8844ff; wireframe: false; opacity: 0.09; emissive: #8844ff; emissiveIntensity: 0.5"></a-torus>
+    </a-entity>
+
+    <!-- ── Colorful pyramids / cones ── -->
+    <a-entity position="-42 2 -35"
+      animation="property: rotation; to: 0 360 0; dur: 36000; loop: true; easing: linear"
+      animation__bob="property: position; from: -42 1 -35; to: -42 3 -35; dur: 7500; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-cone radius-bottom="0.5" height="1.0" segments-radial="6" material="color: #ff2266; wireframe: true; opacity: 0.1; emissive: #ff2266; emissiveIntensity: 0.45"></a-cone>
+    </a-entity>
+    <a-entity position="38 4 38"
+      animation="property: rotation; to: 360 180 90; dur: 44000; loop: true; easing: linear"
+      animation__bob="property: position; from: 38 3 38; to: 38 5 38; dur: 8000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-cone radius-bottom="0.7" height="1.3" segments-radial="4" material="color: #22ffaa; wireframe: true; opacity: 0.08; emissive: #22ffaa; emissiveIntensity: 0.4"></a-cone>
+    </a-entity>
+    <a-entity position="-20 8 -52"
+      animation="property: rotation; to: 180 360 0; dur: 56000; loop: true; easing: linear">
+      <a-cone radius-bottom="0.6" height="1.1" segments-radial="3" material="color: #ffbb00; wireframe: true; opacity: 0.07; emissive: #ffbb00; emissiveIntensity: 0.4"></a-cone>
+    </a-entity>
+
+    <!-- ── Atom structures (colorful, spinning rings + core) ── -->
+    <a-entity position="-30 5 42"
+      animation="property: rotation; to: 0 360 0; dur: 20000; loop: true; easing: linear">
+      <a-torus radius="0.5" radius-tubular="0.015" rotation="0 0 0" material="color: #ff4444; wireframe: false; opacity: 0.1; emissive: #ff4444; emissiveIntensity: 0.5"></a-torus>
+      <a-torus radius="0.5" radius-tubular="0.015" rotation="60 0 90" material="color: #44ff44; wireframe: false; opacity: 0.1; emissive: #44ff44; emissiveIntensity: 0.5"></a-torus>
+      <a-torus radius="0.5" radius-tubular="0.015" rotation="0 60 45" material="color: #4444ff; wireframe: false; opacity: 0.1; emissive: #4444ff; emissiveIntensity: 0.5"></a-torus>
+      <a-sphere radius="0.06" material="color: #ffffff; emissive: #ffffff; emissiveIntensity: 1.0; opacity: 0.8"></a-sphere>
+    </a-entity>
+    <a-entity position="45 9 -42"
+      animation="property: rotation; to: 360 0 0; dur: 22000; loop: true; easing: linear">
+      <a-torus radius="0.6" radius-tubular="0.012" rotation="0 0 0" material="color: #ff8844; wireframe: false; opacity: 0.08; emissive: #ff8844; emissiveIntensity: 0.45"></a-torus>
+      <a-torus radius="0.6" radius-tubular="0.012" rotation="90 0 0" material="color: #44ccff; wireframe: false; opacity: 0.08; emissive: #44ccff; emissiveIntensity: 0.45"></a-torus>
+      <a-sphere radius="0.07" material="color: #ffddaa; emissive: #ffddaa; emissiveIntensity: 1.0; opacity: 0.7"></a-sphere>
+    </a-entity>
+
+    <!-- ── Nested wireframe cubes (cage effect) ── -->
+    <a-entity position="-50 8 -8"
+      animation="property: rotation; to: 360 360 360; dur: 60000; loop: true; easing: linear">
+      <a-box width="1.6" height="1.6" depth="1.6" material="color: #ff6688; wireframe: true; opacity: 0.06; emissive: #ff6688; emissiveIntensity: 0.3"></a-box>
+      <a-box width="0.9" height="0.9" depth="0.9" material="color: #66ff88; wireframe: true; opacity: 0.08; emissive: #66ff88; emissiveIntensity: 0.35"></a-box>
+      <a-box width="0.4" height="0.4" depth="0.4" material="color: #6688ff; wireframe: true; opacity: 0.12; emissive: #6688ff; emissiveIntensity: 0.5"></a-box>
+    </a-entity>
+    <a-entity position="52 3 15"
+      animation="property: rotation; to: 180 360 180; dur: 70000; loop: true; easing: linear">
+      <a-box width="1.4" height="1.4" depth="1.4" material="color: #ffcc44; wireframe: true; opacity: 0.05; emissive: #ffcc44; emissiveIntensity: 0.25"></a-box>
+      <a-box width="0.7" height="0.7" depth="0.7" material="color: #cc44ff; wireframe: true; opacity: 0.08; emissive: #cc44ff; emissiveIntensity: 0.35"></a-box>
+    </a-entity>
+
+    <!-- ── Dodecahedrons (colorful) ── -->
+    <a-entity position="10 13 42"
+      animation="property: rotation; to: 0 360 180; dur: 65000; loop: true; easing: linear"
+      animation__bob="property: position; from: 10 12 42; to: 10 14 42; dur: 11000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-dodecahedron radius="0.55" material="color: #ff44aa; wireframe: true; opacity: 0.08; emissive: #ff44aa; emissiveIntensity: 0.4"></a-dodecahedron>
+    </a-entity>
+    <a-entity position="-45 11 -45"
+      animation="property: rotation; to: 360 180 0; dur: 72000; loop: true; easing: linear">
+      <a-dodecahedron radius="0.65" material="color: #44ffdd; wireframe: true; opacity: 0.06; emissive: #44ffdd; emissiveIntensity: 0.35"></a-dodecahedron>
+    </a-entity>
+
+    <!-- ── Tetrahedrons (colorful) ── -->
+    <a-entity position="30 2 -50"
+      animation="property: rotation; to: 360 0 360; dur: 40000; loop: true; easing: linear"
+      animation__bob="property: position; from: 30 1 -50; to: 30 3 -50; dur: 7000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-tetrahedron radius="0.5" material="color: #ff8833; wireframe: true; opacity: 0.1; emissive: #ff8833; emissiveIntensity: 0.5"></a-tetrahedron>
+    </a-entity>
+    <a-entity position="-35 9 35"
+      animation="property: rotation; to: 180 360 90; dur: 48000; loop: true; easing: linear">
+      <a-tetrahedron radius="0.4" material="color: #33ddff; wireframe: true; opacity: 0.1; emissive: #33ddff; emissiveIntensity: 0.5"></a-tetrahedron>
+    </a-entity>
+    <a-entity position="55 6 -25"
+      animation="property: rotation; to: 0 180 360; dur: 55000; loop: true; easing: linear"
+      animation__bob="property: position; from: 55 5 -25; to: 55 7 -25; dur: 9000; dir: alternate; loop: true; easing: easeInOutSine">
+      <a-tetrahedron radius="0.35" material="color: #ff44ff; wireframe: true; opacity: 0.1; emissive: #ff44ff; emissiveIntensity: 0.5"></a-tetrahedron>
+    </a-entity>
+
+    <!-- ── Colorful light beams (vertical, neon) ── -->
+    <a-cylinder position="-22 8 35" radius="0.015" height="25"
+      material="color: #ff3366; opacity: 0.04; emissive: #ff3366; emissiveIntensity: 0.4"></a-cylinder>
+    <a-cylinder position="35 8 -28" radius="0.015" height="25"
+      material="color: #33ff66; opacity: 0.04; emissive: #33ff66; emissiveIntensity: 0.4"></a-cylinder>
+    <a-cylinder position="8 10 -48" radius="0.018" height="30"
+      material="color: #ff9900; opacity: 0.035; emissive: #ff9900; emissiveIntensity: 0.35"></a-cylinder>
+    <a-cylinder position="-45 7 -22" radius="0.012" height="22"
+      material="color: #9933ff; opacity: 0.04; emissive: #9933ff; emissiveIntensity: 0.4"></a-cylinder>
+    <a-cylinder position="48 8 35" radius="0.015" height="28"
+      material="color: #00ddff; opacity: 0.035; emissive: #00ddff; emissiveIntensity: 0.35"></a-cylinder>
+    <a-cylinder position="-8 9 45" radius="0.012" height="24"
+      material="color: #ffcc33; opacity: 0.04; emissive: #ffcc33; emissiveIntensity: 0.4"></a-cylinder>
+
+    <!-- ── Orbiting rings (colorful, different planes) ── -->
+    <a-entity position="0 5 -30"
+      animation="property: rotation; to: 360 0 0; dur: 35000; loop: true; easing: linear">
+      <a-torus radius="2" radius-tubular="0.01" material="color: #ff6644; opacity: 0.04; emissive: #ff6644; emissiveIntensity: 0.25"></a-torus>
+    </a-entity>
+    <a-entity position="-25 3 0"
+      animation="property: rotation; to: 0 0 360; dur: 40000; loop: true; easing: linear">
+      <a-torus radius="1.8" radius-tubular="0.01" material="color: #44ff66; opacity: 0.04; emissive: #44ff66; emissiveIntensity: 0.25"></a-torus>
+    </a-entity>
+    <a-entity position="25 8 15"
+      animation="property: rotation; to: 0 360 0; dur: 30000; loop: true; easing: linear">
+      <a-torus radius="1.5" radius-tubular="0.012" material="color: #ff44cc; opacity: 0.05; emissive: #ff44cc; emissiveIntensity: 0.3"></a-torus>
     </a-entity>
 
     <!-- Neural Network 3D (above the cube) -->
@@ -687,6 +1400,10 @@
       <a-entity id="nn-connections"></a-entity>
       <a-entity id="nn-labels"></a-entity>
     </a-entity>
+
+    <!-- Boids Simulation Container -->
+    <a-entity id="simulation-container" position="0 0 0" visible="false"
+      boids-simulation="count: 120; speed: 2; enabled: false; bounds: 4"></a-entity>
 
   </a-scene>
 
@@ -782,10 +1499,19 @@
         ent => ent.querySelector('a-cylinder') && ent.querySelector('a-sphere')
       );
 
+      // Dark mode accent lights
+      const darkLights = ['dark-light-1', 'dark-light-2', 'dark-light-3', 'dark-light-4'];
+
       if (isDark) {
         body.classList.remove('light-mode');
         themeToggle.innerHTML = '&#9790;';
         sky.setAttribute('color', '#020208');
+
+        // Turn on accent lights
+        darkLights.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.setAttribute('visible', true);
+        });
         cube.setAttribute('material', 'color: #334466; wireframe: true; opacity: 0.3');
         ambient.setAttribute('intensity', '0.6');
         ground.setAttribute('material', 'color: #030308; metalness: 0.9; roughness: 0.1; opacity: 0.98');
@@ -846,6 +1572,12 @@
         body.classList.add('light-mode');
         themeToggle.innerHTML = '&#9728;';
         sky.setAttribute('color', '#e8edf8');
+
+        // Turn off accent lights in light mode
+        darkLights.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.setAttribute('visible', false);
+        });
         cube.setAttribute('material', 'color: #5577aa; wireframe: true; opacity: 0.5');
         ambient.setAttribute('intensity', '1.3');
         ground.setAttribute('material', 'color: #c8d4e8; metalness: 0.1; roughness: 0.7; opacity: 0.95');
@@ -910,7 +1642,7 @@
       }
     }
     applyTheme(); // apply on load
-    themeToggle.addEventListener('click', () => { isDark = !isDark; applyTheme(); });
+    themeToggle.addEventListener('click', () => { isDark = !isDark; applyTheme(); if (typeof socket !== 'undefined') socket.emit('theme_change', { isDark }); });
 
     /* ══════════════ Model Selection ══════════════ */
     let selectedModel = 'svm';
@@ -919,6 +1651,7 @@
         document.querySelectorAll('.model-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         selectedModel = btn.dataset.model;
+        if (typeof socket !== 'undefined') socket.emit('model_select', { model: btn.dataset.model });
       });
     });
 
@@ -986,6 +1719,29 @@
             <div class="info-row">Layers: <strong>${mi.layers.join(' \u2192 ')}</strong></div>
             <div class="info-row">Iterations: <strong>${mi.iterations}</strong></div>`;
           document.getElementById('legend-boundary-text').textContent = 'NN Decision Boundary';
+        } else if (mi.model_type === 'knn') {
+          infoHTML = `
+            <span class="model-badge badge-knn">K-Nearest Neighbors</span>
+            <div class="info-row">Points: <strong>${data.num_points}</strong></div>
+            <div class="info-row">Accuracy: <strong>${mi.accuracy}%</strong></div>
+            <div class="info-row">K (neighbors): <strong>${mi.n_neighbors}</strong></div>`;
+          document.getElementById('legend-boundary-text').textContent = 'KNN Decision Boundary';
+        } else if (mi.model_type === 'decision_tree') {
+          infoHTML = `
+            <span class="model-badge badge-dt">Decision Tree</span>
+            <div class="info-row">Points: <strong>${data.num_points}</strong></div>
+            <div class="info-row">Accuracy: <strong>${mi.accuracy}%</strong></div>
+            <div class="info-row">Depth: <strong>${mi.max_depth}</strong></div>
+            <div class="info-row">Leaves: <strong>${mi.n_leaves}</strong></div>`;
+          document.getElementById('legend-boundary-text').textContent = 'Decision Tree Boundary';
+        } else if (mi.model_type === 'random_forest') {
+          infoHTML = `
+            <span class="model-badge badge-rf">Random Forest</span>
+            <div class="info-row">Points: <strong>${data.num_points}</strong></div>
+            <div class="info-row">Accuracy: <strong>${mi.accuracy}%</strong></div>
+            <div class="info-row">Trees: <strong>${mi.n_estimators}</strong></div>
+            <div class="info-row">Max depth: <strong>${mi.max_depth}</strong></div>`;
+          document.getElementById('legend-boundary-text').textContent = 'Random Forest Boundary';
         }
         infoHTML += `<div class="info-row" style="margin-top:4px;">Boundary pts: <strong>${data.num_boundary_points}</strong></div>`;
         infoContent.innerHTML = infoHTML;
@@ -1017,6 +1773,9 @@
         controlsPanel.classList.add('fade-in');
         uploadBtn.disabled = false;
 
+        // Trigger title animation on successful visualize
+        triggerTitleAnimation();
+
       } catch (err) {
         statusEl.className = 'error';
         statusEl.textContent = err.message;
@@ -1024,10 +1783,78 @@
       }
     });
 
+    /* ══════════════ Title Animation on Visualize ══════════════ */
+    function triggerTitleAnimation() {
+      const titleGroup = document.getElementById('title-group');
+      const titleMain = document.getElementById('title-main');
+      const titleGlow = document.getElementById('title-glow');
+      const titleLine = document.getElementById('title-line');
+      const titleOrbL = document.getElementById('title-orb-l');
+      const titleOrbR = document.getElementById('title-orb-r');
+      const shockwave = document.getElementById('title-shockwave');
+
+      // 1) Scale punch: title zooms up then settles back
+      titleMain.removeAttribute('animation__punch');
+      titleGlow.removeAttribute('animation__punch');
+      void titleMain.offsetWidth; // force reflow
+      titleMain.setAttribute('animation__punch',
+        'property: scale; from: 5 5 5; to: 6.5 6.5 6.5; dur: 300; easing: easeOutQuad; dir: alternate; loop: 1');
+      titleGlow.setAttribute('animation__punch',
+        'property: scale; from: 5.1 5.1 5.1; to: 6.8 6.8 6.8; dur: 300; easing: easeOutQuad; dir: alternate; loop: 1');
+
+      // 2) Color flash: text flashes bright white then back
+      titleMain.removeAttribute('animation__flash');
+      void titleMain.offsetWidth;
+      titleMain.setAttribute('animation__flash',
+        'property: components.text.material.uniforms.color.value; type: color; from: #ffffff; to: #8ab4ff; dur: 600; easing: easeInQuad');
+
+      // 3) Glow burst: glow text opacity spikes
+      titleGlow.removeAttribute('animation__burst');
+      void titleGlow.offsetWidth;
+      titleGlow.setAttribute('animation__burst',
+        'property: material.opacity; from: 0.8; to: 0.3; dur: 800; easing: easeInQuad');
+
+      // 4) Line flash: underline flashes bright
+      titleLine.removeAttribute('animation__flash');
+      void titleLine.offsetWidth;
+      titleLine.setAttribute('animation__flash',
+        'property: material.emissiveIntensity; from: 1.5; to: 0.6; dur: 600; easing: easeInQuad');
+
+      // 5) Orbs fly outward then bounce back
+      titleOrbL.removeAttribute('animation__fly');
+      titleOrbR.removeAttribute('animation__fly');
+      void titleOrbL.offsetWidth;
+      titleOrbL.setAttribute('animation__fly',
+        'property: position; from: -5 -0.5 0; to: -3.5 -0.5 0; dur: 500; easing: easeOutBack');
+      titleOrbR.setAttribute('animation__fly',
+        'property: position; from: 5 -0.5 0; to: 3.5 -0.5 0; dur: 500; easing: easeOutBack');
+
+      // 6) Shockwave ring expands outward
+      shockwave.setAttribute('visible', true);
+      shockwave.removeAttribute('animation__expand');
+      shockwave.removeAttribute('animation__fade');
+      void shockwave.offsetWidth;
+      shockwave.setAttribute('animation__expand',
+        'property: radius; from: 0.2; to: 6; dur: 800; easing: easeOutQuad');
+      shockwave.setAttribute('animation__fade',
+        'property: material.opacity; from: 0.6; to: 0; dur: 800; easing: easeInQuad');
+      setTimeout(() => { shockwave.setAttribute('visible', false); }, 850);
+
+      // 7) Whole title group rocks slightly
+      titleGroup.removeAttribute('animation__rock');
+      void titleGroup.offsetWidth;
+      titleGroup.setAttribute('animation__rock',
+        'property: rotation; from: 0 0 -3; to: 0 0 3; dur: 200; dir: alternate; loop: 2; easing: easeInOutSine');
+      setTimeout(() => {
+        titleGroup.removeAttribute('animation__rock');
+        titleGroup.setAttribute('rotation', '0 0 0');
+      }, 1000);
+    }
+
     /* ══════════════ Data Visualization ══════════════ */
     const COLORS = { 0: '#ff4466', 1: '#4499ff', 2: '#44ff88', 3: '#ffaa44' };
     const COLOR_NAMES = { 0: 'Red (0)', 1: 'Blue (1)', 2: 'Green (2)', 3: 'Orange (3)' };
-    const BOUNDARY_COLORS = { svm: '#b48cff', linear_regression: '#44dd88', neural_network: '#ff88cc' };
+    const BOUNDARY_COLORS = { svm: '#b48cff', linear_regression: '#44dd88', neural_network: '#ff88cc', knn: '#44c8ff', decision_tree: '#ffc844', random_forest: '#44ff96' };
 
     async function loadVisualization(modelType) {
       const pointsContainer = document.getElementById('data-points');
@@ -1325,6 +2152,7 @@
       const val = pointSizeSlider.value;
       pointSizeVal.textContent = parseFloat(val).toFixed(2);
       document.querySelectorAll('.data-point').forEach(el => el.setAttribute('radius', val));
+      if (typeof socket !== 'undefined') socket.emit('slider_change', { type: 'pointSize', val });
     });
 
     const planeOpSlider = document.getElementById('plane-opacity');
@@ -1333,6 +2161,7 @@
       const val = planeOpSlider.value;
       planeOpVal.textContent = parseFloat(val).toFixed(2);
       document.querySelectorAll('.plane-cell').forEach(el => el.setAttribute('material', 'opacity', val));
+      if (typeof socket !== 'undefined') socket.emit('slider_change', { type: 'planeOpacity', val });
     });
 
     function setupToggle(btnId, targetId) {
@@ -1340,7 +2169,9 @@
       const target = document.getElementById(targetId);
       btn.addEventListener('click', () => {
         btn.classList.toggle('active');
-        target.setAttribute('visible', btn.classList.contains('active'));
+        const active = btn.classList.contains('active');
+        target.setAttribute('visible', active);
+        if (typeof socket !== 'undefined') socket.emit('toggle_element', { btnId, targetId, active });
       });
     }
     setupToggle('toggle-points', 'data-points');
@@ -1384,6 +2215,7 @@
       rotateBtn.classList.toggle('active');
       const enabled = rotateBtn.classList.contains('active');
       document.getElementById('coord-system').setAttribute('auto-rotate', 'enabled', enabled);
+      if (typeof socket !== 'undefined') socket.emit('camera_control', { type: 'rotate', active: enabled });
     });
 
     // Drag-rotate toggle
@@ -1393,6 +2225,7 @@
       dragBtn.classList.toggle('active');
       const enabled = dragBtn.classList.contains('active');
       document.getElementById('coord-system').setAttribute('drag-rotate', 'enabled', enabled);
+      if (typeof socket !== 'undefined') socket.emit('camera_control', { type: 'drag', active: enabled });
       // Disable look-controls when dragging to avoid conflict
       if (enabled) {
         mainCam.setAttribute('look-controls', 'enabled', false);
@@ -1664,16 +2497,16 @@
 
     trainPlayBtn.addEventListener('click', () => {
       if (trainPlaying) {
-        // Pause
         trainPlaying = false;
         if (trainTimer) clearTimeout(trainTimer);
         trainPlayBtn.textContent = 'Play';
+        if (typeof socket !== 'undefined') socket.emit('train_control', { action: 'pause' });
       } else {
-        // Play / Replay
         if (trainIdx >= trainSnapshots.length) trainIdx = 0;
         trainPlaying = true;
         trainPlayBtn.textContent = 'Pause';
         playTraining();
+        if (typeof socket !== 'undefined') socket.emit('train_control', { action: 'play' });
       }
     });
 
@@ -1684,6 +2517,7 @@
         trainPlayBtn.textContent = 'Play';
         trainIdx--;
         renderTrainSnapshot(trainIdx);
+        if (typeof socket !== 'undefined') socket.emit('train_control', { action: 'prev' });
       }
     });
 
@@ -1694,6 +2528,7 @@
         trainPlayBtn.textContent = 'Play';
         trainIdx++;
         renderTrainSnapshot(trainIdx);
+        if (typeof socket !== 'undefined') socket.emit('train_control', { action: 'next' });
       }
     });
 
@@ -1702,10 +2537,79 @@
       if (trainTimer) clearTimeout(trainTimer);
       trainPanel.style.display = 'none';
       legend.classList.remove('shifted-up');
+      if (typeof socket !== 'undefined') socket.emit('train_control', { action: 'close' });
     });
 
     trainSpeedSlider.addEventListener('input', () => {
       trainSpeedVal.textContent = trainSpeedSlider.value;
+      if (typeof socket !== 'undefined') socket.emit('train_control', { action: 'speed', val: trainSpeedSlider.value });
+    });
+
+    /* ══════════════ 3D Boids Simulation ══════════════ */
+    const simToggleBtn = document.getElementById('sim-toggle-btn');
+    const simPanel = document.getElementById('sim-panel');
+    const simContainer = document.getElementById('simulation-container');
+    const simCountSlider = document.getElementById('sim-count');
+    const simSpeedSlider = document.getElementById('sim-speed');
+    const simSepSlider = document.getElementById('sim-sep');
+    const simAlignSlider = document.getElementById('sim-align');
+    const simCohSlider = document.getElementById('sim-coh');
+    let simActive = false;
+
+    simToggleBtn.addEventListener('click', () => {
+      simActive = !simActive;
+      if (simActive) {
+        simContainer.setAttribute('visible', true);
+        simContainer.setAttribute('boids-simulation', 'enabled', true);
+        simPanel.style.display = 'block';
+        simPanel.classList.add('fade-in');
+        simToggleBtn.style.borderColor = 'rgba(68,220,255,0.8)';
+        simToggleBtn.style.background = 'rgba(68,220,255,0.1)';
+      } else {
+        simContainer.setAttribute('boids-simulation', 'enabled', false);
+        simContainer.setAttribute('visible', false);
+        simPanel.style.display = 'none';
+        simToggleBtn.style.borderColor = 'rgba(68,220,255,0.4)';
+        simToggleBtn.style.background = 'transparent';
+      }
+      if (typeof socket !== 'undefined') socket.emit('sim_toggle', { active: simActive });
+    });
+
+    // Slider wiring
+    function wireSimSlider(slider, valEl, attr, fmt) {
+      slider.addEventListener('input', () => {
+        const v = parseFloat(slider.value);
+        valEl.textContent = fmt ? v.toFixed(1) : v;
+        simContainer.setAttribute('boids-simulation', attr, v);
+        if (typeof socket !== 'undefined') socket.emit('sim_settings', { attr, val: v });
+      });
+    }
+    wireSimSlider(simCountSlider, document.getElementById('sim-count-val'), 'count', false);
+    wireSimSlider(simSpeedSlider, document.getElementById('sim-speed-val'), 'speed', true);
+    wireSimSlider(simSepSlider, document.getElementById('sim-sep-val'), 'separation', true);
+    wireSimSlider(simAlignSlider, document.getElementById('sim-align-val'), 'alignment', true);
+    wireSimSlider(simCohSlider, document.getElementById('sim-coh-val'), 'cohesion', true);
+
+    document.getElementById('sim-pause').addEventListener('click', function() {
+      const comp = simContainer.components['boids-simulation'];
+      const nowEnabled = comp.data.enabled;
+      simContainer.setAttribute('boids-simulation', 'enabled', !nowEnabled);
+      this.textContent = nowEnabled ? 'Resume' : 'Pause';
+      if (typeof socket !== 'undefined') socket.emit('sim_pause', { enabled: !nowEnabled });
+    });
+    document.getElementById('sim-reset').addEventListener('click', () => {
+      const comp = simContainer.components['boids-simulation'];
+      if (comp) comp.resetBoids();
+      if (typeof socket !== 'undefined') socket.emit('sim_reset', {});
+    });
+    document.getElementById('sim-close').addEventListener('click', () => {
+      simActive = false;
+      simContainer.setAttribute('boids-simulation', 'enabled', false);
+      simContainer.setAttribute('visible', false);
+      simPanel.style.display = 'none';
+      simToggleBtn.style.borderColor = 'rgba(68,220,255,0.4)';
+      simToggleBtn.style.background = 'transparent';
+      if (typeof socket !== 'undefined') socket.emit('sim_close', {});
     });
 
     /* ══════════════ Keyboard Shortcuts ══════════════ */
@@ -1721,6 +2625,9 @@
         case 't':
           themeToggle.click();
           break;
+        case 's':
+          simToggleBtn.click();
+          break;
         case ' ':
           e.preventDefault();
           if (trainPanel.style.display === 'block') trainPlayBtn.click();
@@ -1732,7 +2639,9 @@
           if (trainPanel.style.display === 'block') trainNextBtn.click();
           break;
         case 'escape':
-          if (trainPanel.style.display === 'block') {
+          if (simPanel.style.display === 'block') {
+            document.getElementById('sim-close').click();
+          } else if (trainPanel.style.display === 'block') {
             trainCloseBtn.click();
           } else if (tooltipPinned) {
             tooltipPinned = false;
@@ -1743,6 +2652,263 @@
           break;
       }
     });
+    /* ══════════════ Real-time Sync (Socket.IO) ══════════════ */
+    const socket = io({ transports: ['websocket', 'polling'] });
+    let isSyncSource = false; // true if THIS client triggered the viz
+
+    socket.on('connect', () => {
+      console.log('[Sync] Connected:', socket.id);
+      // Show connected indicator
+      const dot = document.createElement('div');
+      dot.id = 'sync-dot';
+      dot.style.cssText = 'position:fixed;top:8px;right:60px;width:10px;height:10px;border-radius:50%;background:#44ff88;z-index:999;box-shadow:0 0 6px #44ff88;';
+      dot.title = 'Synced';
+      document.body.appendChild(dot);
+      socket.emit('request_sync');
+    });
+
+    socket.on('disconnect', () => {
+      console.log('[Sync] Disconnected');
+      const dot = document.getElementById('sync-dot');
+      if (dot) dot.style.background = '#ff4444';
+    });
+
+    // Another client triggered Visualize — load the results here too
+    socket.on('viz_ready', async (data) => {
+      if (isSyncSource) { isSyncSource = false; return; } // skip if we triggered it
+      console.log('[Sync] Received viz_ready from another client');
+
+      const mi = data.model_info;
+      statusEl.className = 'success';
+      statusEl.textContent = `[Synced] Trained on ${data.num_points} points.`;
+
+      // Update info panel
+      let infoHTML = '';
+      if (mi.model_type === 'svm') {
+        infoHTML = `<span class="model-badge badge-svm">SVM (Linear)</span>
+          <div class="info-row">Points: <strong>${data.num_points}</strong></div>
+          <div class="info-row">Accuracy: <strong>${mi.accuracy}%</strong></div>`;
+        document.getElementById('legend-boundary-text').textContent = 'SVM Decision Plane';
+      } else if (mi.model_type === 'linear_regression') {
+        infoHTML = `<span class="model-badge badge-lr">Linear Regression</span>
+          <div class="info-row">Points: <strong>${data.num_points}</strong></div>
+          <div class="info-row">R\u00b2: <strong>${mi.r_squared}</strong></div>`;
+        document.getElementById('legend-boundary-text').textContent = 'Regression Surface';
+      } else if (mi.model_type === 'neural_network') {
+        infoHTML = `<span class="model-badge badge-nn">Neural Network</span>
+          <div class="info-row">Points: <strong>${data.num_points}</strong></div>
+          <div class="info-row">Accuracy: <strong>${mi.accuracy}%</strong></div>
+          <div class="info-row">Layers: <strong>${mi.layers.join(' \u2192 ')}</strong></div>`;
+        document.getElementById('legend-boundary-text').textContent = 'NN Decision Boundary';
+      } else if (mi.model_type === 'knn') {
+        infoHTML = `<span class="model-badge badge-knn">K-Nearest Neighbors</span>
+          <div class="info-row">Points: <strong>${data.num_points}</strong></div>
+          <div class="info-row">Accuracy: <strong>${mi.accuracy}%</strong></div>`;
+        document.getElementById('legend-boundary-text').textContent = 'KNN Decision Boundary';
+      } else if (mi.model_type === 'decision_tree') {
+        infoHTML = `<span class="model-badge badge-dt">Decision Tree</span>
+          <div class="info-row">Points: <strong>${data.num_points}</strong></div>
+          <div class="info-row">Accuracy: <strong>${mi.accuracy}%</strong></div>`;
+        document.getElementById('legend-boundary-text').textContent = 'Decision Tree Boundary';
+      } else if (mi.model_type === 'random_forest') {
+        infoHTML = `<span class="model-badge badge-rf">Random Forest</span>
+          <div class="info-row">Points: <strong>${data.num_points}</strong></div>
+          <div class="info-row">Accuracy: <strong>${mi.accuracy}%</strong></div>`;
+        document.getElementById('legend-boundary-text').textContent = 'Random Forest Boundary';
+      }
+      infoHTML += `<div class="info-row" style="margin-top:4px;">Boundary pts: <strong>${data.num_boundary_points}</strong></div>`;
+      infoContent.innerHTML = infoHTML;
+      infoPanel.style.display = 'block';
+      infoPanel.classList.add('fade-in');
+
+      await loadVisualization(mi.model_type);
+
+      const nnContainer = document.getElementById('nn-container');
+      const nnToggleBtn = document.getElementById('toggle-nn');
+      if (mi.model_type === 'neural_network') {
+        await renderNeuralNetwork();
+        nnContainer.setAttribute('visible', true);
+        nnToggleBtn.style.display = '';
+        nnToggleBtn.classList.add('active');
+      } else {
+        nnContainer.setAttribute('visible', false);
+        nnToggleBtn.style.display = 'none';
+        nnToggleBtn.classList.remove('active');
+        document.getElementById('nn-neurons').innerHTML = '';
+        document.getElementById('nn-connections').innerHTML = '';
+        document.getElementById('nn-labels').innerHTML = '';
+      }
+
+      statusEl.textContent = '[Synced] Visualization ready!';
+      legend.style.display = 'block';
+      controlsPanel.style.display = 'block';
+      triggerTitleAnimation();
+    });
+
+    // Another client triggered Train Live — play animation here too
+    socket.on('train_ready', (data) => {
+      if (isSyncSource) { isSyncSource = false; return; }
+      console.log('[Sync] Received train_ready from another client');
+
+      trainSnapshots = data.snapshots;
+      trainPoints = data.points;
+      trainIdx = 0;
+
+      statusEl.className = 'success';
+      statusEl.textContent = `[Synced] ${trainSnapshots.length} snapshots. Playing...`;
+
+      trainPanel.style.display = 'block';
+      trainPanel.classList.add('fade-in');
+      legend.classList.add('shifted-up');
+
+      const nnContainer = document.getElementById('nn-container');
+      nnContainer.setAttribute('visible', true);
+      const nnToggleBtn = document.getElementById('toggle-nn');
+      nnToggleBtn.style.display = '';
+      nnToggleBtn.classList.add('active');
+      controlsPanel.style.display = 'block';
+      legend.style.display = 'block';
+
+      renderTrainPoints();
+      renderTrainSnapshot(0);
+      trainPlaying = true;
+      trainPlayBtn.textContent = 'Pause';
+      playTraining();
+    });
+
+    // Sync simulation toggle
+    socket.on('sim_toggle', (data) => {
+      simActive = data.active;
+      simContainer.setAttribute('visible', simActive);
+      simContainer.setAttribute('boids-simulation', 'enabled', simActive);
+      simPanel.style.display = simActive ? 'block' : 'none';
+      simToggleBtn.style.borderColor = simActive ? 'rgba(68,220,255,0.8)' : 'rgba(68,220,255,0.4)';
+      simToggleBtn.style.background = simActive ? 'rgba(68,220,255,0.1)' : 'transparent';
+    });
+
+    // Sync simulation settings
+    socket.on('sim_settings', (data) => {
+      if (data.attr && data.val !== undefined) {
+        simContainer.setAttribute('boids-simulation', data.attr, data.val);
+        // Update slider UI
+        const sliderMap = { count: simCountSlider, speed: simSpeedSlider, separation: simSepSlider, alignment: simAlignSlider, cohesion: simCohSlider };
+        const valMap = { count: 'sim-count-val', speed: 'sim-speed-val', separation: 'sim-sep-val', alignment: 'sim-align-val', cohesion: 'sim-coh-val' };
+        if (sliderMap[data.attr]) { sliderMap[data.attr].value = data.val; }
+        if (valMap[data.attr]) { const el = document.getElementById(valMap[data.attr]); if (el) el.textContent = data.val; }
+      }
+    });
+
+    // ── Sync: Theme toggle ──
+    socket.on('theme_change', (data) => {
+      isDark = data.isDark;
+      applyTheme();
+    });
+
+    // ── Sync: Model selection ──
+    socket.on('model_select', (data) => {
+      selectedModel = data.model;
+      document.querySelectorAll('.model-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.model === data.model);
+      });
+    });
+
+    // ── Sync: Toggle elements (points/plane/axes/env/nn) ──
+    socket.on('toggle_element', (data) => {
+      const btn = document.getElementById(data.btnId);
+      const target = document.getElementById(data.targetId);
+      if (btn && target) {
+        if (data.active) { btn.classList.add('active'); } else { btn.classList.remove('active'); }
+        target.setAttribute('visible', data.active);
+      }
+    });
+
+    // ── Sync: Camera controls (rotate/drag) ──
+    socket.on('camera_control', (data) => {
+      if (data.type === 'rotate') {
+        const rb = document.getElementById('toggle-rotate');
+        if (data.active) rb.classList.add('active'); else rb.classList.remove('active');
+        document.getElementById('coord-system').setAttribute('auto-rotate', 'enabled', data.active);
+      } else if (data.type === 'drag') {
+        const db = document.getElementById('toggle-drag');
+        if (data.active) db.classList.add('active'); else db.classList.remove('active');
+        document.getElementById('coord-system').setAttribute('drag-rotate', 'enabled', data.active);
+        const mainCam = document.getElementById('main-camera');
+        mainCam.setAttribute('look-controls', 'enabled', !data.active);
+      }
+    });
+
+    // ── Sync: Sliders (point size, plane opacity) ──
+    socket.on('slider_change', (data) => {
+      if (data.type === 'pointSize') {
+        pointSizeSlider.value = data.val;
+        pointSizeVal.textContent = parseFloat(data.val).toFixed(2);
+        document.querySelectorAll('.data-point').forEach(el => el.setAttribute('radius', data.val));
+      } else if (data.type === 'planeOpacity') {
+        planeOpSlider.value = data.val;
+        planeOpVal.textContent = parseFloat(data.val).toFixed(2);
+        document.querySelectorAll('.plane-cell').forEach(el => el.setAttribute('material', 'opacity', data.val));
+      }
+    });
+
+    // ── Sync: Simulation pause/resume ──
+    socket.on('sim_pause', (data) => {
+      simContainer.setAttribute('boids-simulation', 'enabled', data.enabled);
+      document.getElementById('sim-pause').textContent = data.enabled ? 'Pause' : 'Resume';
+    });
+
+    // ── Sync: Simulation reset ──
+    socket.on('sim_reset', () => {
+      const comp = simContainer.components['boids-simulation'];
+      if (comp) comp.resetBoids();
+    });
+
+    // ── Sync: Simulation close ──
+    socket.on('sim_close', () => {
+      simActive = false;
+      simContainer.setAttribute('boids-simulation', 'enabled', false);
+      simContainer.setAttribute('visible', false);
+      simPanel.style.display = 'none';
+      simToggleBtn.style.borderColor = 'rgba(68,220,255,0.4)';
+      simToggleBtn.style.background = 'transparent';
+    });
+
+    // ── Sync: Training controls ──
+    socket.on('train_control', (data) => {
+      if (data.action === 'play') {
+        if (trainIdx >= trainSnapshots.length) trainIdx = 0;
+        trainPlaying = true;
+        trainPlayBtn.textContent = 'Pause';
+        playTraining();
+      } else if (data.action === 'pause') {
+        trainPlaying = false;
+        if (trainTimer) clearTimeout(trainTimer);
+        trainPlayBtn.textContent = 'Play';
+      } else if (data.action === 'prev' && trainIdx > 0) {
+        trainPlaying = false;
+        if (trainTimer) clearTimeout(trainTimer);
+        trainPlayBtn.textContent = 'Play';
+        trainIdx--;
+        renderTrainSnapshot(trainIdx);
+      } else if (data.action === 'next' && trainIdx < trainSnapshots.length - 1) {
+        trainPlaying = false;
+        if (trainTimer) clearTimeout(trainTimer);
+        trainPlayBtn.textContent = 'Play';
+        trainIdx++;
+        renderTrainSnapshot(trainIdx);
+      } else if (data.action === 'close') {
+        trainPlaying = false;
+        if (trainTimer) clearTimeout(trainTimer);
+        trainPanel.style.display = 'none';
+        legend.classList.remove('shifted-up');
+      } else if (data.action === 'speed') {
+        trainSpeedSlider.value = data.val;
+        trainSpeedVal.textContent = data.val;
+      }
+    });
+
+    // Mark this client as the source before uploading so we don't double-render
+    uploadBtn.addEventListener('click', () => { isSyncSource = true; }, true);
+    trainLiveBtn.addEventListener('click', () => { isSyncSource = true; }, true);
   </script>
 
 </body>
