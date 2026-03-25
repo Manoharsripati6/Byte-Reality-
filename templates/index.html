@@ -765,6 +765,22 @@
       const ambient = document.getElementById('light-ambient');
       const ground = document.getElementById('ground-plane');
       const scene = document.getElementById('vr-scene');
+      const envGroup = document.getElementById('environment-group');
+
+      // All dark-mode-only elements
+      const starfield = document.querySelectorAll('#starfield-container a-sphere');
+      const energyOrbs = envGroup.querySelectorAll(':scope > a-sphere');
+      const auroraPlanes = envGroup.querySelectorAll(':scope > a-plane:not(#ground-plane)');
+      const vertBeams = envGroup.querySelectorAll(':scope > a-cylinder');
+      const gridBoxes = document.querySelectorAll('#ground-grid a-box');
+      const floorRings = envGroup.querySelectorAll(':scope > a-torus');
+      const glowDisc = envGroup.querySelector(':scope > a-circle');
+      const wireShapes = document.querySelectorAll('a-icosahedron, a-octahedron, a-dodecahedron, a-tetrahedron');
+      const orbitRings = envGroup.querySelectorAll(':scope > a-entity > a-torus');
+      // Beacon pillars: child entities that contain both a-cylinder and a-sphere
+      const beaconPillars = Array.from(envGroup.querySelectorAll(':scope > a-entity')).filter(
+        ent => ent.querySelector('a-cylinder') && ent.querySelector('a-sphere')
+      );
 
       if (isDark) {
         body.classList.remove('light-mode');
@@ -775,124 +791,121 @@
         ground.setAttribute('material', 'color: #030308; metalness: 0.9; roughness: 0.1; opacity: 0.98');
         scene.setAttribute('fog', 'type: exponential; color: #020208; density: 0.006');
 
-        // Restore starfield + energy orbs
-        document.querySelectorAll('#starfield-container a-sphere').forEach(s => s.setAttribute('visible', true));
-        document.querySelectorAll('#environment-group > a-sphere').forEach(s => s.setAttribute('visible', true));
+        // Show starfield + energy orbs
+        starfield.forEach(s => s.setAttribute('visible', true));
+        energyOrbs.forEach(s => s.setAttribute('visible', true));
 
-        // Restore aurora bands, vertical beams
-        document.querySelectorAll('#environment-group > a-plane:not(#ground-plane)').forEach(p => p.setAttribute('visible', true));
-        document.querySelectorAll('#environment-group > a-cylinder').forEach(c => c.setAttribute('visible', true));
+        // Show aurora + beams
+        auroraPlanes.forEach(p => p.setAttribute('visible', true));
+        vertBeams.forEach(c => c.setAttribute('visible', true));
 
-        // Restore pillar beacons
-        document.querySelectorAll('#environment-group > a-entity').forEach(ent => {
-          const cyl = ent.querySelector('a-cylinder');
-          const sph = ent.querySelector('a-sphere');
-          if (cyl && sph) {
-            cyl.setAttribute('material', 'opacity', '0.08');
-            sph.setAttribute('material', 'opacity', '0.5');
-          }
+        // Beacon pillars
+        beaconPillars.forEach(ent => {
+          ent.querySelector('a-cylinder').setAttribute('material', 'opacity', '0.08');
+          ent.querySelector('a-sphere').setAttribute('material', 'opacity', '0.5');
         });
 
-        // Restore dark grid lines
-        document.querySelectorAll('#ground-grid a-box').forEach(b => {
-          const w = parseFloat(b.getAttribute('width'));
-          if (w > 0.02) {
+        // Grid lines
+        gridBoxes.forEach(b => {
+          const w = parseFloat(b.getAttribute('width') || '0');
+          const h = parseFloat(b.getAttribute('height') || '0');
+          const maxDim = Math.max(w, h);
+          if (maxDim > 0.02) {
             b.setAttribute('material', 'color: #1a3399; opacity: 0.7; emissive: #1a3399; emissiveIntensity: 0.6');
-          } else if (w > 0.01) {
+          } else if (maxDim > 0.01) {
             b.setAttribute('material', 'color: #0e1d55; opacity: 0.5; emissive: #0e1d55; emissiveIntensity: 0.4');
           } else {
             b.setAttribute('material', 'color: #081030; opacity: 0.2; emissive: #081030; emissiveIntensity: 0.2');
           }
         });
 
-        // Restore dark floor rings
-        document.querySelectorAll('#environment-group > a-torus').forEach(t => {
+        // Floor rings
+        floorRings.forEach(t => {
           t.setAttribute('material', 'color', '#2255ff');
           t.setAttribute('material', 'emissive', '#2255ff');
           t.setAttribute('material', 'emissiveIntensity', '0.5');
           t.setAttribute('material', 'opacity', '0.2');
         });
 
-        // Restore wireframe shapes
-        document.querySelectorAll('a-icosahedron, a-octahedron, a-dodecahedron, a-tetrahedron').forEach(s => {
+        // Wireframe shapes
+        wireShapes.forEach(s => {
           s.setAttribute('material', 'emissiveIntensity', '0.4');
           s.setAttribute('material', 'opacity', '0.12');
         });
 
-        // Restore glow disc
-        const glowDisc = document.querySelector('#environment-group > a-circle');
+        // Glow disc
         if (glowDisc) glowDisc.setAttribute('material', 'color: #1133aa; opacity: 0.12; emissive: #2244dd; emissiveIntensity: 0.5; side: double');
 
-        // Restore orbiting rings
-        document.querySelectorAll('#environment-group > a-entity > a-torus').forEach(t => {
+        // Orbiting rings
+        orbitRings.forEach(t => {
           t.setAttribute('material', 'emissiveIntensity', '0.3');
           t.setAttribute('material', 'opacity', '0.08');
         });
+
       } else {
         body.classList.add('light-mode');
         themeToggle.innerHTML = '&#9728;';
-        sky.setAttribute('color', '#dce3f0');
-        cube.setAttribute('material', 'color: #4466aa; wireframe: true; opacity: 0.55');
-        ambient.setAttribute('intensity', '1.2');
-        ground.setAttribute('material', 'color: #b8c4dd; metalness: 0.15; roughness: 0.65; opacity: 0.98');
-        scene.setAttribute('fog', 'type: exponential; color: #dce3f0; density: 0.012');
+        sky.setAttribute('color', '#e8edf8');
+        cube.setAttribute('material', 'color: #5577aa; wireframe: true; opacity: 0.5');
+        ambient.setAttribute('intensity', '1.3');
+        ground.setAttribute('material', 'color: #c8d4e8; metalness: 0.1; roughness: 0.7; opacity: 0.95');
+        scene.setAttribute('fog', 'type: exponential; color: #e8edf8; density: 0.008');
 
-        // Hide starfield + energy orbs (look awful against bright sky)
-        document.querySelectorAll('#starfield-container a-sphere').forEach(s => s.setAttribute('visible', false));
-        document.querySelectorAll('#environment-group > a-sphere').forEach(s => s.setAttribute('visible', false));
+        // Hide starfield + energy orbs (look bad on light sky)
+        starfield.forEach(s => s.setAttribute('visible', false));
+        energyOrbs.forEach(s => s.setAttribute('visible', false));
 
-        // Hide aurora bands, vertical beams (dark-mode-only effects)
-        document.querySelectorAll('#environment-group > a-plane:not(#ground-plane)').forEach(p => p.setAttribute('visible', false));
-        document.querySelectorAll('#environment-group > a-cylinder').forEach(c => c.setAttribute('visible', false));
+        // Hide aurora + beams
+        auroraPlanes.forEach(p => p.setAttribute('visible', false));
+        vertBeams.forEach(c => c.setAttribute('visible', false));
 
-        // Tone down pillar beacons
-        document.querySelectorAll('#environment-group > a-entity').forEach(ent => {
+        // Tone down beacon pillars
+        beaconPillars.forEach(ent => {
           const cyl = ent.querySelector('a-cylinder');
           const sph = ent.querySelector('a-sphere');
-          if (cyl && sph) {
-            cyl.setAttribute('material', 'color: #8899cc; opacity: 0.12; emissive: #8899cc; emissiveIntensity: 0.1');
-            sph.setAttribute('material', 'color: #6688cc; opacity: 0.3; emissive: #6688cc; emissiveIntensity: 0.2');
-          }
+          cyl.setAttribute('material', 'color: #8899bb; opacity: 0.1; emissive: #8899bb; emissiveIntensity: 0.05');
+          sph.setAttribute('material', 'color: #7799cc; opacity: 0.25; emissive: #7799cc; emissiveIntensity: 0.1');
         });
 
-        // Grid: softer lines for light background
-        document.querySelectorAll('#ground-grid a-box').forEach(b => {
-          const w = parseFloat(b.getAttribute('width'));
-          if (w > 0.02) {
-            b.setAttribute('material', 'color: #7788bb; opacity: 0.35; emissive: #7788bb; emissiveIntensity: 0.1');
-          } else if (w > 0.01) {
-            b.setAttribute('material', 'color: #8899cc; opacity: 0.25; emissive: #8899cc; emissiveIntensity: 0.05');
+        // Grid: soft pastel lines
+        gridBoxes.forEach(b => {
+          const w = parseFloat(b.getAttribute('width') || '0');
+          const h = parseFloat(b.getAttribute('height') || '0');
+          const maxDim = Math.max(w, h);
+          if (maxDim > 0.02) {
+            b.setAttribute('material', 'color: #8899cc; opacity: 0.3; emissive: #8899cc; emissiveIntensity: 0.05');
+          } else if (maxDim > 0.01) {
+            b.setAttribute('material', 'color: #99aabb; opacity: 0.2; emissive: #99aabb; emissiveIntensity: 0.03');
           } else {
-            b.setAttribute('material', 'color: #99aadd; opacity: 0.15; emissive: #99aadd; emissiveIntensity: 0.02');
+            b.setAttribute('material', 'color: #aabbcc; opacity: 0.12; emissive: #aabbcc; emissiveIntensity: 0.01');
           }
         });
 
         // Floor rings: very subtle
-        document.querySelectorAll('#environment-group > a-torus').forEach(t => {
-          t.setAttribute('material', 'color', '#7788cc');
-          t.setAttribute('material', 'emissive', '#7788cc');
-          t.setAttribute('material', 'emissiveIntensity', '0.08');
-          t.setAttribute('material', 'opacity', '0.12');
-        });
-
-        // Wireframe shapes: visible but muted
-        document.querySelectorAll('a-icosahedron, a-octahedron, a-dodecahedron, a-tetrahedron').forEach(s => {
-          s.setAttribute('material', 'color', '#6677bb');
-          s.setAttribute('material', 'emissive', '#6677bb');
-          s.setAttribute('material', 'emissiveIntensity', '0.1');
-          s.setAttribute('material', 'opacity', '0.12');
-        });
-
-        // Glow disc: barely visible
-        const glowDisc = document.querySelector('#environment-group > a-circle');
-        if (glowDisc) glowDisc.setAttribute('material', 'color: #8899cc; opacity: 0.08; emissive: #8899cc; emissiveIntensity: 0.05; side: double');
-
-        // Orbiting rings: very subtle
-        document.querySelectorAll('#environment-group > a-entity > a-torus').forEach(t => {
+        floorRings.forEach(t => {
           t.setAttribute('material', 'color', '#8899cc');
           t.setAttribute('material', 'emissive', '#8899cc');
           t.setAttribute('material', 'emissiveIntensity', '0.05');
-          t.setAttribute('material', 'opacity', '0.06');
+          t.setAttribute('material', 'opacity', '0.1');
+        });
+
+        // Wireframe shapes: muted
+        wireShapes.forEach(s => {
+          s.setAttribute('material', 'color', '#7788bb');
+          s.setAttribute('material', 'emissive', '#7788bb');
+          s.setAttribute('material', 'emissiveIntensity', '0.08');
+          s.setAttribute('material', 'opacity', '0.1');
+        });
+
+        // Glow disc: minimal
+        if (glowDisc) glowDisc.setAttribute('material', 'color: #99aacc; opacity: 0.06; emissive: #99aacc; emissiveIntensity: 0.03; side: double');
+
+        // Orbiting rings: barely visible
+        orbitRings.forEach(t => {
+          t.setAttribute('material', 'color', '#8899cc');
+          t.setAttribute('material', 'emissive', '#8899cc');
+          t.setAttribute('material', 'emissiveIntensity', '0.04');
+          t.setAttribute('material', 'opacity', '0.05');
         });
       }
     }
