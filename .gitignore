@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+uploads/
+cert.pem
+key.pem
+flask_log.txt
+.claude/settings.local.json
+static/

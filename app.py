@@ -645,7 +645,8 @@ if __name__ == "__main__":
         else:
             print(" * cert.pem/key.pem not found, falling back to HTTP")
 
-    run_kwargs = dict(debug=False, host="0.0.0.0", port=5000,
+    port = int(os.environ.get("PORT", 5000))
+    run_kwargs = dict(debug=False, host="0.0.0.0", port=port,
                       allow_unsafe_werkzeug=True)
     if ssl_ctx:
         run_kwargs["ssl_context"] = ssl_ctx
